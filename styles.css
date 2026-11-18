@@ -1,9 +1,9 @@
-:root{--bg:#0F1218;--card:#1A1F29;--field:#232A36;--ink:#ECEFF4;--mute:#9AA4B2;--line:#2A3140;--border:#3A4354;--track:#2E3646;--stat:#222936;--acc:#4F5FE0;--acc-t:#9AA6FF;--accbg:#262C4D;--tom:#C2410C;--tom-t:#FB923C;--ok:#34D399;--okbtn:#0F766E;--danger:#F87171;--dangerbg:#3A2327;--heat1:#3B4A8A;--heat3:#7C8CFF;color-scheme:dark}
-:root[data-theme=light]{--bg:#F5F6F8;--card:#FFFFFF;--field:#FFFFFF;--ink:#14181F;--mute:#5B6472;--line:#EEF0F3;--border:#C8CEDA;--track:#E4E7EC;--stat:#F5F6F8;--acc:#3B4CCA;--acc-t:#3B4CCA;--accbg:#ECEEFB;--tom:#C2410C;--tom-t:#C2410C;--ok:#0F766E;--okbtn:#0F766E;--danger:#B42318;--dangerbg:#FDE8E7;--heat1:#B7BEF0;--heat3:#3B4CCA;color-scheme:light}
-@media (prefers-color-scheme:light){:root[data-theme=auto]{--bg:#F5F6F8;--card:#FFFFFF;--field:#FFFFFF;--ink:#14181F;--mute:#5B6472;--line:#EEF0F3;--border:#C8CEDA;--track:#E4E7EC;--stat:#F5F6F8;--acc:#3B4CCA;--acc-t:#3B4CCA;--accbg:#ECEEFB;--tom-t:#C2410C;--ok:#0F766E;--danger:#B42318;--dangerbg:#FDE8E7;--heat1:#B7BEF0;--heat3:#3B4CCA;color-scheme:light}}
+:root{--glow:#1D2347;--bg:#0F1218;--card:#1A1F29;--field:#232A36;--ink:#ECEFF4;--mute:#9AA4B2;--line:#2A3140;--border:#3A4354;--track:#2E3646;--stat:#222936;--acc:#4F5FE0;--acc-t:#9AA6FF;--accbg:#262C4D;--tom:#C2410C;--tom-t:#FB923C;--ok:#34D399;--okbtn:#0F766E;--danger:#F87171;--dangerbg:#3A2327;--heat1:#3B4A8A;--heat3:#7C8CFF;color-scheme:dark}
+:root[data-theme=light]{--glow:#E6E9FF;--bg:#F5F6F8;--card:#FFFFFF;--field:#FFFFFF;--ink:#14181F;--mute:#5B6472;--line:#EEF0F3;--border:#C8CEDA;--track:#E4E7EC;--stat:#F5F6F8;--acc:#3B4CCA;--acc-t:#3B4CCA;--accbg:#ECEEFB;--tom:#C2410C;--tom-t:#C2410C;--ok:#0F766E;--okbtn:#0F766E;--danger:#B42318;--dangerbg:#FDE8E7;--heat1:#B7BEF0;--heat3:#3B4CCA;color-scheme:light}
+@media (prefers-color-scheme:light){:root[data-theme=auto]{--glow:#E6E9FF;--bg:#F5F6F8;--card:#FFFFFF;--field:#FFFFFF;--ink:#14181F;--mute:#5B6472;--line:#EEF0F3;--border:#C8CEDA;--track:#E4E7EC;--stat:#F5F6F8;--acc:#3B4CCA;--acc-t:#3B4CCA;--accbg:#ECEEFB;--tom-t:#C2410C;--ok:#0F766E;--danger:#B42318;--dangerbg:#FDE8E7;--heat1:#B7BEF0;--heat3:#3B4CCA;color-scheme:light}}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Inter",system-ui,sans-serif}
-body{padding-top:env(safe-area-inset-top)}
+body{padding-top:env(safe-area-inset-top);background-image:linear-gradient(180deg,var(--glow),var(--bg) 280px);background-repeat:no-repeat;min-height:100vh}
 main{padding:20px 16px calc(110px + env(safe-area-inset-bottom));max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
 h1{margin:0;font-size:30px;font-weight:800;letter-spacing:-.5px}
 h2{margin:0;font-size:15px;font-weight:700}
@@ -93,3 +93,37 @@ textarea{min-height:46vh;padding:12px;resize:vertical;line-height:1.45}
 .keys .eq{background:var(--acc);color:#fff;border-color:var(--acc)}
 .keys .w2{grid-column:span 2}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+.hero{background:linear-gradient(135deg,#4338CA 0%,#8B3FC4 55%,#BE185D 100%);border-radius:22px;padding:18px;display:flex;align-items:center;gap:16px;color:#fff;box-shadow:0 10px 30px rgba(99,60,200,.35)}
+.hero h1{font-size:26px;color:#fff}
+.hr{position:relative;width:88px;height:88px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.hring{position:absolute;inset:0;border-radius:50%;background:conic-gradient(#fff calc(var(--p)*1%),rgba(255,255,255,.3) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 10px),#000 calc(100% - 9px));mask:radial-gradient(farthest-side,transparent calc(100% - 10px),#000 calc(100% - 9px));transition:background .4s}
+.hr b{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+.hx{min-width:0;display:flex;flex-direction:column;gap:2px}
+.hsub{font-size:14px;font-weight:500}
+.hline{font-size:13px;font-weight:700;margin-top:4px}
+.hero.win .hr{animation:glow 1.6s ease-in-out infinite alternate}
+.tdot{width:34px;height:34px;border-radius:11px;display:inline-flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;background:rgba(124,140,255,.18);background:color-mix(in srgb,var(--tc) 20%,transparent)}
+.mring{width:34px;height:34px;border-radius:50%;flex-shrink:0;background:conic-gradient(var(--ok) calc(var(--p)*1%),var(--track) 0);display:inline-flex;align-items:center;justify-content:center}
+.mring i{font-style:normal;width:26px;height:26px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--ok);font-weight:800}
+.mring.on{background:var(--okbtn)}.mring.on i{background:var(--okbtn);color:#fff}
+.flame{color:var(--tom-t);font-weight:800}
+.nudge{gap:2px}.nudge h2{padding-bottom:6px}
+.nrow{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line);font-size:14px;line-height:1.35}
+.nrow:first-of-type{border-top:none}
+.nic{font-size:18px;width:26px;text-align:center;flex-shrink:0}
+nav button.on span{background:var(--accbg);border-radius:14px;padding:1px 16px}
+nav button span{transition:background .2s,padding .2s}
+.btn,.chk,.menu,.chip,.keys button,nav button{transition:transform .12s,background-color .15s}
+.btn:active,.chk:active,.menu:active,.chip:active,.keys button:active,nav button:active{transform:scale(.96)}
+.card{box-shadow:0 1px 0 rgba(255,255,255,.03) inset,0 4px 14px rgba(0,0,0,.12)}
+:root[data-theme=light] .card{box-shadow:0 1px 2px rgba(20,24,31,.06),0 4px 14px rgba(20,24,31,.05)}
+main.in{animation:fadein .22s ease-out}
+.pop{animation:pop .35s cubic-bezier(.3,1.6,.5,1)}
+.confetti{position:fixed;inset:0;pointer-events:none;z-index:9;overflow:hidden}
+.confetti i{position:absolute;top:-12px;width:9px;height:14px;border-radius:2px;animation:fall 1.9s ease-in forwards}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes pop{0%{transform:scale(.6)}60%{transform:scale(1.2)}100%{transform:scale(1)}}
+@keyframes fall{to{transform:translate(var(--dx),105vh) rotate(540deg);opacity:.9}}
+@keyframes glow{from{filter:drop-shadow(0 0 0 rgba(255,255,255,0))}to{filter:drop-shadow(0 0 10px rgba(255,255,255,.7))}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}

@@ -1,7 +1,7 @@
 'use strict';
 /* FocusDay — personal planner PWA. Data stays on the phone (localStorage). */
 const KEY = 'focusday.v1';
-const BUILD = '2026-11-18 · v7';
+const BUILD = '2026-11-19 · v8';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -16,6 +16,8 @@ const fmtNum = n => String(r2(n));
 const TYPES = [['todo', '✅', 'Todo'], ['reminder', '⏰', 'Reminder'], ['meeting', '👥', 'Meeting'], ['appointment', '📅', 'Appointment'], ['trip', '✈️', 'Trip'], ['call', '📞', 'Call']];
 const REPEATS = [['none', 'No repeat'], ['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Every week'], ['monthly', 'Every month']];
 const UNITS = ['pages', 'km', 'min', 'hours', 'times', 'glasses', 'count'];
+const TCOL = { todo: '#7C8CFF', reminder: '#FBBF24', meeting: '#A78BFA', appointment: '#F472B6', trip: '#2DD4BF', call: '#FB923C' };
+const tchip = t => '<span class="tdot" style="--tc:' + (TCOL[t.type] || TCOL.todo) + '" aria-hidden="true">' + typeOf(t.type)[1] + '</span>';
 const typeOf = id => TYPES.find(t => t[0] === id) || TYPES[0];
 
 const DEFAULT = {
@@ -153,9 +155,11 @@ function tasksFor(day) {
   return S.tasks.filter(t => occursOn(t, day)).sort((a, b) => (a.time || '').localeCompare(b.time || '') || (a.created || 0) - (b.created || 0));
 }
 function overdue() { const today = dkey(); return S.tasks.filter(t => t.repeat === 'none' && !isDone(t, t.date) && t.date < today).sort((a, b) => a.date.localeCompare(b.date)); }
+let pulse = null;
+const buzz = p => { try { navigator.vibrate && navigator.vibrate(p); } catch (_) {} };
 function toggleDone(id, day) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
-  t.doneDays = t.doneDays || {}; if (t.doneDays[day]) delete t.doneDays[day]; else t.doneDays[day] = 1;
+  t.doneDays = t.doneDays || {}; if (t.doneDays[day]) delete t.doneDays[day]; else { t.doneDays[day] = 1; pulse = id; buzz(15); }
   save(); render();
 }
 function removeTask(id) {
@@ -180,7 +184,7 @@ function habitStreak(h) {
   while (habitMet(h, dkey(d))) { n++; d.setDate(d.getDate() - 1); }
   return n;
 }
-function setHabit(id, fn) { const h = S.habits.find(x => x.id === id); if (!h) return; const k = dkey(); const v = fn(habitAmt(h, k)); if (v <= 0) delete h.log[k]; else h.log[k] = r2(v); save(); render(); }
+function setHabit(id, fn) { const h = S.habits.find(x => x.id === id); if (!h) return; const k = dkey(); const v = fn(habitAmt(h, k)); if (v <= 0) delete h.log[k]; else h.log[k] = r2(v); if (habitMet(h, k)) { pulse = id; buzz(15); } save(); render(); }
 function removeHabit(id) {
   const i = S.habits.findIndex(x => x.id === id), it = S.habits[i]; if (i < 0) return;
   S.habits.splice(i, 1); save(); render();
@@ -249,30 +253,64 @@ async function refreshInfo(force) {
   if (jobs.length) { await Promise.all(jobs); updateInfo(); }
 }
 
+/* ---------- progress + smart nudges (rule-based, on-device) ---------- */
+function dayProgress() {
+  const today = dkey(), ts = tasksFor(today), done = ts.filter(t => isDone(t, today)).length + S.habits.filter(x => habitMet(x, today)).length, total = ts.length + S.habits.length;
+  return { done, total, pct: total ? Math.round(100 * done / total) : 0 };
+}
+function nudges() {
+  const out = [], now = new Date(), today = dkey(now), hr = now.getHours(), wd = now.getDay();
+  S.habits.forEach(x => {
+    if (habitMet(x, today)) return;
+    const st = habitStreak(x), left = r2(x.goal - habitAmt(x, today));
+    if (st >= 2 && hr >= 16) { out.push(['🔥', x.title + ': ' + st + '-day streak at risk — ' + fmtNum(left) + ' ' + x.unit + ' to go today.']); return; }
+    const keys = Object.keys(x.log).sort(); if (keys.length < 5) return;
+    let seen = 0, miss = 0; for (let i = 1; i <= 4; i++) { const d = new Date(now); d.setDate(d.getDate() - 7 * i); const k = dkey(d); if (k >= keys[0]) { seen++; if (!habitMet(x, k)) miss++; } }
+    if (seen >= 3 && miss >= 3) out.push(['🧠', 'You often skip "' + x.title + '" on ' + now.toLocaleDateString('en-GB', { weekday: 'long' }) + 's — do it early today.']);
+  });
+  const tm = new Date(now); tm.setDate(tm.getDate() + 1); const tl = tasksFor(dkey(tm));
+  if (tl.length) { const f = tl.find(t => t.time) || tl[0]; out.push(['📅', 'Tomorrow: ' + (f.time ? f.time + ' ' : '') + f.title + (tl.length > 1 ? ' (+' + (tl.length - 1) + ' more)' : '')]); }
+  const mins = S.sessions.filter(s => dkey(new Date(s.start)) === today).reduce((q, s) => q + s.dur, 0);
+  if (mins > 0) out.push(['⏱', fmtMin(mins) + ' of focus today. Nice rhythm.']);
+  else if (hr >= 13 && hr < 20 && wd >= 1 && wd <= 5) out.push(['⏱', 'No focus session yet today — one 25-minute round is enough to start.']);
+  return out.slice(0, 3);
+}
+let celebrate = false;
+function confetti() {
+  const box = document.createElement('div'); box.className = 'confetti'; box.setAttribute('aria-hidden', 'true');
+  const cols = ['#7C8CFF', '#F472B6', '#FBBF24', '#34D399', '#FB923C'];
+  for (let i = 0; i < 28; i++) { const s = document.createElement('i'); s.style.cssText = 'left:' + Math.round(Math.random() * 100) + '%;background:' + cols[i % 5] + ';animation-delay:' + (Math.random() * 0.4).toFixed(2) + 's;--dx:' + Math.round(Math.random() * 120 - 60) + 'px'; box.appendChild(s); }
+  document.body.appendChild(box); setTimeout(() => box.remove(), 2400); buzz([30, 40, 30]);
+}
+
 /* ---------- Today: summary ---------- */
 function viewToday() {
   const today = dkey(), list = tasksFor(today), over = overdue();
   const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
   const dayStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-  let h = '<div><h1>' + greet + '</h1><div class="sub">' + esc(dayStr) + '</div></div>';
+  const pr = dayProgress(), best = Math.max(0, ...S.habits.map(habitStreak));
+  let h = '<section class="hero' + (pr.total && pr.done === pr.total ? ' win' : '') + '"><div class="hr" role="img" aria-label="' + pr.pct + ' percent of today done"><div class="hring" style="--p:' + pr.pct + '"></div><b>' + pr.pct + '%</b></div>' +
+    '<div class="hx"><h1>' + greet + '</h1><div class="hsub">' + esc(dayStr) + '</div><div class="hline">' + (!pr.total ? 'A clean slate. Add something to plan.' : pr.done === pr.total ? 'All done — nice work 🎉' : pr.done + ' of ' + pr.total + ' done') + (best >= 2 ? ' · 🔥 ' + best + '-day streak' : '') + '</div></div></section>';
   h += '<div class="grid3" id="info" aria-label="Weather, time and exchange rate">' + infoHTML() + '</div>';
+  const nd = nudges();
+  if (nd.length) h += '<section class="card nudge" aria-label="Smart nudges"><h2>✨ Smart nudges</h2>' + nd.map(n => '<div class="nrow"><span class="nic" aria-hidden="true">' + n[0] + '</span><span>' + esc(n[1]) + '</span></div>').join('') + '</section>';
   if (new Date().getDay() === 0) h += '<div class="banner row"><span class="sp">It\'s Sunday — your weekly report is ready.</span><button class="btn pri" data-go="report">Open</button></div>';
 
   if (over.length) {
     h += '<section class="card"><h2 style="padding-bottom:6px;color:var(--danger)">Overdue</h2>';
     over.forEach(t => {
-      h += '<div class="item"><button class="chk" role="checkbox" aria-checked="false" aria-label="' + esc(t.title) + '" data-od="' + t.id + '"></button><span class="title">' + typeOf(t.type)[1] + ' ' + esc(t.title) + '</span><span class="sub">' + dayLabel(t.date) + '</span>' +
+      h += '<div class="item"><button class="chk" role="checkbox" aria-checked="false" aria-label="' + esc(t.title) + '" data-od="' + t.id + '"></button>' + tchip(t) + '<span class="title">' + esc(t.title) + '</span><span class="sub">' + dayLabel(t.date) + '</span>' +
         '<button class="btn" data-mv="' + t.id + '" aria-label="Move to today: ' + esc(t.title) + '">→ Today</button></div>';
     });
     h += '</section>';
   }
 
   h += '<section class="card"><div class="row" style="padding-bottom:6px"><h2 class="sp">Today\'s plan</h2><button class="btn" id="toggleEdit">' + (editing ? 'Done' : 'Edit') + '</button><button class="btn pri" data-newtask="1">+ Add</button></div>';
-  if (!list.length) h += '<div class="empty">Nothing planned for today.</div>';
+  if (!list.length) h += '<div class="empty">Nothing planned for today ✨<br>Enjoy the space or add something.</div>';
   list.slice().sort((a, b) => isDone(a, today) - isDone(b, today)).forEach(t => {
     const d = isDone(t, today);
-    h += '<div class="item ' + (d ? 'done' : '') + '"><button class="chk ' + (d ? 'on' : '') + '" role="checkbox" aria-checked="' + d + '" aria-label="' + esc(t.title) + '" data-tc="' + t.id + '">' + (d ? '✓' : '') + '</button>' +
-      '<div class="sp"><div class="title" style="white-space:normal">' + typeOf(t.type)[1] + ' ' + esc(t.title) + '</div><div class="sub">' + (t.time || 'All day') + (t.repeat !== 'none' ? ' · ' + repeatLabel(t.repeat) : '') + '</div></div>' +
+    h += '<div class="item ' + (d ? 'done' : '') + '"><button class="chk ' + (d ? 'on' : '') + (pulse === t.id ? ' pop' : '') + '" role="checkbox" aria-checked="' + d + '" aria-label="' + esc(t.title) + '" data-tc="' + t.id + '">' + (d ? '✓' : '') + '</button>' +
+      tchip(t) + '<div class="sp"><div class="title" style="white-space:normal">' + esc(t.title) + '</div><div class="sub">' + (t.time || 'All day') + (t.repeat !== 'none' ? ' · ' + repeatLabel(t.repeat) : '') + '</div></div>' +
       (editing ? '<button class="icon" data-td="' + t.id + '" aria-label="Delete: ' + esc(t.title) + '">🗑</button>' : '') + '</div>';
   });
   h += '</section>';
@@ -281,11 +319,10 @@ function viewToday() {
   if (!S.habits.length) h += '<div class="empty">No habits yet.</div>';
   S.habits.forEach(x => {
     const a = habitAmt(x, today), met = a >= x.goal, st = habitStreak(x), p = Math.min(100, Math.round(100 * a / x.goal));
-    h += '<div class="habit"><div class="row"><span class="mark ' + (met ? 'on' : '') + '" aria-hidden="true">' + (met ? '✓' : '') + '</span><div class="sp"><div class="title" style="white-space:normal">' + esc(x.title) + '</div>' +
-      '<div class="sub">' + fmtNum(a) + ' / ' + fmtNum(x.goal) + ' ' + esc(x.unit) + (met ? ' · done' : '') + (st ? ' · ' + st + '-day streak' : '') + '</div></div>' +
+    h += '<div class="habit"><div class="row"><span class="mring' + (met ? ' on' : '') + (pulse === x.id ? ' pop' : '') + '" style="--p:' + p + '" aria-hidden="true"><i>' + (met ? '✓' : '') + '</i></span><div class="sp"><div class="title" style="white-space:normal">' + esc(x.title) + '</div>' +
+      '<div class="sub">' + (st >= 2 ? '<span class="flame">🔥 ' + st + '</span> ' : '') + fmtNum(a) + ' / ' + fmtNum(x.goal) + ' ' + esc(x.unit) + (met ? ' · done' : '') + (st >= 2 ? '' : st ? ' · ' + st + '-day streak' : '') + '</div></div>' +
       (a > 0 ? '<button class="btn" data-hr="' + x.id + '" aria-label="Reset today: ' + esc(x.title) + '">Reset</button>' : '') +
       (editing ? '<button class="icon" data-hd="' + x.id + '" aria-label="Delete habit: ' + esc(x.title) + '">🗑</button>' : '') + '</div>' +
-      '<div class="bar"><i style="width:' + p + '%"></i></div>' +
       '<form class="row" data-hf="' + x.id + '"><input type="text" inputmode="decimal" placeholder="How many ' + esc(x.unit) + '?" aria-label="Amount of ' + esc(x.unit) + ' for ' + esc(x.title) + '"><button class="btn pri" type="submit">Add</button>' + (met ? '' : '<button class="btn" type="button" data-hdone="' + x.id + '" aria-label="Mark done: ' + esc(x.title) + '">Done</button>') + '</form></div>';
   });
   return h + '</section>';
@@ -366,7 +403,7 @@ function bindHabitForm() {
 }
 function viewPlan() {
   const today = dkey();
-  const row = t => '<div class="item"><span aria-hidden="true">' + typeOf(t.type)[1] + '</span><button class="link sp" data-te="' + t.id + '"><div class="title" style="white-space:normal">' + esc(t.title) + '</div><div class="sub">' + esc(taskMeta(t)) + '</div></button>' +
+  const row = t => '<div class="item">' + tchip(t) + '<button class="link sp" data-te="' + t.id + '"><div class="title" style="white-space:normal">' + esc(t.title) + '</div><div class="sub">' + esc(taskMeta(t)) + '</div></button>' +
     '<button class="icon" data-td="' + t.id + '" aria-label="Delete: ' + esc(t.title) + '">🗑</button></div>';
   const over = overdue(), oneoff = S.tasks.filter(t => t.repeat === 'none' && t.date >= today && !isDone(t, t.date)).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))), rep = S.tasks.filter(t => t.repeat !== 'none');
   let h = '<div class="row"><h1 class="sp">Plan</h1>' + (form ? '' : '<button class="btn pri" id="newTask">+ New task</button>') + '</div>';
@@ -773,7 +810,7 @@ function bindMore() {
 const TABS = [['today', '☀️', 'Today'], ['plan', '🗓', 'Plan'], ['pomodoro', '⏱', 'Pomodoro'], ['more', '➕', 'More'], ['settings', '⚙️', 'Settings']];
 let tab = (location.hash || '#today').slice(1);
 if (!TABS.find(t => t[0] === tab) && tab !== 'report') tab = 'today';
-function go(t) { if (t === 'more') { moreSub = null; openList = openNote = null; } tab = t; location.hash = t; editing = false; window.scrollTo(0, 0); render(); }
+function go(t) { const v = $('#view'); v.classList.remove('in'); void v.offsetWidth; v.classList.add('in'); if (t === 'more') { moreSub = null; openList = openNote = null; } tab = t; location.hash = t; editing = false; window.scrollTo(0, 0); render(); }
 function render() {
   const view = $('#view'), views = { today: viewToday, plan: viewPlan, pomodoro: viewPomodoro, report: viewReport, more: viewMore, settings: viewSettings };
   const act = tab === 'report' ? 'more' : tab, y = window.scrollY; view.innerHTML = views[tab]();
@@ -782,6 +819,8 @@ function render() {
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => go(b.dataset.tab));
   document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
   window.scrollTo(0, y);
+  pulse = null;
+  if (tab === 'today') { const pr = dayProgress(); if (pr.total && pr.done === pr.total && S.celebrated !== dkey()) { S.celebrated = dkey(); save(); if (!matchMedia('(prefers-reduced-motion: reduce)').matches) confetti(); } }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { load(); applyTheme(); refreshInfo(); if (S.timer.running) lockScreen(true); onTick(); render(); checkReminders(); } });
 setInterval(onTick, 500);
