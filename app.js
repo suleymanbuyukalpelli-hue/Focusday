@@ -23,7 +23,7 @@ const DEFAULT = {
     { id: uid(), title: 'Run', goal: 1, unit: 'km', log: {} },
     { id: uid(), title: 'Brush teeth', goal: 3, unit: 'times', log: {} }
   ], sessions: [], notified: {},
-  settings: { focus: 25, brk: 5, long: 15, wake: true, notify: true, theme: 'dark', city: 'Istanbul', zone: 'Europe/Berlin' },
+  settings: { focus: 25, brk: 5, long: 15, wake: true, notify: true, theme: 'dark', city: 'İstanbul', zone: 'Europe/Berlin', base: 'EUR', quote: 'TRY' },
   timer: { phase: 'focus', running: false, endsAt: 0, remaining: 25 * 60, round: 1, taskId: null, free: true, label: 'Reading emails' }
 };
 let S;
@@ -36,7 +36,10 @@ function load() {
   if (!fresh) migrate();
 }
 function migrate() {
-  S.timer.free = true; // older versions: tasks without date/type, separate reminders, habits without unit
+  S.timer.free = true;
+  const legacy = { Istanbul: 'İstanbul', Izmir: 'İzmir', Balikesir: 'Balıkesir', Tekirdag: 'Tekirdağ' };
+  if (legacy[S.settings.city]) S.settings.city = legacy[S.settings.city];
+  S.settings.base = S.settings.base || 'EUR'; S.settings.quote = S.settings.quote || 'TRY'; // older versions: tasks without date/type, separate reminders, habits without unit
   const today = dkey();
   S.tasks.forEach(t => {
     if (!t.date) t.date = t.created ? dkey(new Date(t.created)) : today;
@@ -198,7 +201,11 @@ function saveForm() {
 }
 
 /* ---------- Today info: weather, other country's time, EUR/TRY ---------- */
-const CITIES = { Istanbul: [41.01, 28.98], Ankara: [39.93, 32.86], Izmir: [38.42, 27.14], Bursa: [40.19, 29.06], Konya: [37.87, 32.48], Karaman: [37.18, 33.23], Denizli: [37.78, 29.09], Balikesir: [39.65, 27.89], Kocaeli: [40.77, 29.94], Tekirdag: [40.98, 27.51], Antalya: [36.90, 30.70] };
+const PROVINCES = 'Adana 37.00 35.32;Adıyaman 37.76 38.28;Afyonkarahisar 38.76 30.54;Ağrı 39.72 43.05;Aksaray 38.37 34.03;Amasya 40.65 35.83;Ankara 39.93 32.86;Antalya 36.90 30.70;Ardahan 41.11 42.70;Artvin 41.18 41.82;Aydın 37.85 27.84;Balıkesir 39.65 27.89;Bartın 41.64 32.34;Batman 37.88 41.13;Bayburt 40.26 40.23;Bilecik 40.14 29.98;Bingöl 38.89 40.50;Bitlis 38.40 42.11;Bolu 40.73 31.61;Burdur 37.72 30.29;Bursa 40.19 29.06;Çanakkale 40.15 26.41;Çankırı 40.60 33.62;Çorum 40.55 34.95;Denizli 37.78 29.09;Diyarbakır 37.91 40.24;Düzce 40.84 31.16;Edirne 41.68 26.56;Elazığ 38.67 39.22;Erzincan 39.75 39.49;Erzurum 39.90 41.27;Eskişehir 39.78 30.52;Gaziantep 37.07 37.38;Giresun 40.91 38.39;Gümüşhane 40.46 39.48;Hakkari 37.57 43.74;Hatay 36.20 36.16;Iğdır 39.92 44.04;Isparta 37.76 30.55;İstanbul 41.01 28.98;İzmir 38.42 27.14;Kahramanmaraş 37.58 36.94;Karabük 41.20 32.63;Karaman 37.18 33.23;Kars 40.60 43.10;Kastamonu 41.39 33.78;Kayseri 38.72 35.49;Kilis 36.72 37.12;Kırıkkale 39.85 33.52;Kırklareli 41.74 27.23;Kırşehir 39.15 34.17;Kocaeli 40.77 29.94;Konya 37.87 32.48;Kütahya 39.42 29.98;Malatya 38.35 38.31;Manisa 38.61 27.43;Mardin 37.31 40.74;Mersin 36.80 34.64;Muğla 37.22 28.36;Muş 38.74 41.49;Nevşehir 38.62 34.71;Niğde 37.97 34.68;Ordu 40.98 37.88;Osmaniye 37.07 36.25;Rize 41.02 40.52;Sakarya 40.69 30.44;Samsun 41.29 36.33;Siirt 37.93 41.94;Sinop 42.03 35.15;Sivas 39.75 37.02;Şanlıurfa 37.16 38.79;Şırnak 37.52 42.46;Tekirdağ 40.98 27.51;Tokat 40.31 36.55;Trabzon 41.00 39.72;Tunceli 39.11 39.55;Uşak 38.68 29.41;Van 38.49 43.38;Yalova 40.65 29.27;Yozgat 39.82 34.81;Zonguldak 41.45 31.80'.split(';').map(x => { const p = x.split(' '); return [p[0], +p[1], +p[2]]; });
+const CITIES = {}; PROVINCES.forEach(p => { CITIES[p[0]] = [p[1], p[2]]; });
+const PAIRS = [['EUR', 'TRY'], ['USD', 'TRY'], ['GBP', 'TRY'], ['CHF', 'TRY'], ['EUR', 'USD'], ['GBP', 'USD'], ['EUR', 'GBP']];
+let customPair = false;
+const CURRENCIES = ['TRY', 'EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CNY', 'AUD', 'CAD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'BGN', 'INR', 'BRL', 'KRW', 'ZAR', 'AED', 'SAR', 'RUB'];
 const ZONES = [['Berlin (Germany)', 'Europe/Berlin'], ['London', 'Europe/London'], ['New York', 'America/New_York'], ['Los Angeles', 'America/Los_Angeles'], ['Dubai', 'Asia/Dubai'], ['Moscow', 'Europe/Moscow'], ['Mumbai', 'Asia/Kolkata'], ['Shanghai', 'Asia/Shanghai'], ['Tokyo', 'Asia/Tokyo'], ['Sydney', 'Australia/Sydney']];
 const WX_KEY = 'focusday.wx', FX_KEY = 'focusday.fx';
 const wxIcon = (c, day) => c === 0 ? (day ? '☀️' : '🌙') : c <= 2 ? '🌤' : c === 3 ? '☁️' : c <= 48 ? '🌫' : c <= 57 ? '🌦' : c <= 67 ? '🌧' : c <= 77 ? '🌨' : c <= 82 ? '🌦' : c <= 86 ? '🌨' : '⛈';
@@ -208,7 +215,7 @@ function zoneOffsetMs(zone, at) {
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(at.getTime() / 1000) * 1000;
 }
 function infoHTML() {
-  const wx = cache(WX_KEY), fx = cache(FX_KEY), city = S.settings.city, zone = S.settings.zone, now = new Date();
+  const wx = cache(WX_KEY), fx = cache(FX_KEY), city = S.settings.city, zone = S.settings.zone, now = new Date(), pair = S.settings.base + '/' + S.settings.quote;
   const zl = (ZONES.find(z => z[1] === zone) || [zone])[0].split(' (')[0];
   let time = '--:--', diff = '';
   try {
@@ -219,20 +226,24 @@ function infoHTML() {
   const w = wx && wx.city === city ? wx : null;
   return '<div class="stat"><b>' + (w ? wxIcon(w.code, w.day) + ' ' + Math.round(w.temp) + '°' : '—') + '</b><span class="sub">' + esc(city) + '</span></div>' +
     '<div class="stat"><b>' + time + '</b><span class="sub">' + esc(zl) + ' · ' + diff + '</span></div>' +
-    '<div class="stat"><b>' + (fx ? fx.rate.toFixed(2) : '—') + '</b><span class="sub" title="' + (fx && fx.date ? 'Rate of ' + fx.date : '') + '">EUR/TRY</span></div>';
+    '<div class="stat"><b>' + (fx && fx.pair === pair ? fmtRate(fx.rate) : '—') + '</b><span class="sub" title="' + (fx && fx.date ? 'Rate of ' + fx.date : '') + '">' + pair.replace('/', ' / ') + '</span></div>';
 }
+const fmtRate = r => r >= 10 ? r.toFixed(2) : r >= 1 ? r.toFixed(4) : r.toFixed(5);
 function updateInfo() { const el = $('#info'); if (el) el.innerHTML = infoHTML(); }
 async function fetchJSON(url) { const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) throw new Error(r.status); return r.json(); }
 async function refreshInfo(force) {
-  const now = Date.now(), wx = cache(WX_KEY), fx = cache(FX_KEY), c = CITIES[S.settings.city] || CITIES.Istanbul;
+  const now = Date.now(), wx = cache(WX_KEY), fx = cache(FX_KEY), c = CITIES[S.settings.city] || CITIES['İstanbul'];
   const jobs = [];
   if (force || !wx || wx.city !== S.settings.city || now - wx.t > 20 * 60000) jobs.push(fetchJSON('https://api.open-meteo.com/v1/forecast?latitude=' + c[0] + '&longitude=' + c[1] + '&current=temperature_2m,weather_code,is_day').then(j => {
     localStorage.setItem(WX_KEY, JSON.stringify({ t: now, city: S.settings.city, temp: j.current.temperature_2m, code: j.current.weather_code, day: !!j.current.is_day }));
   }).catch(() => {}));
-  if (force || !fx || now - fx.t > 60 * 60000) jobs.push(fetchJSON('https://api.frankfurter.dev/v1/latest?base=EUR&symbols=TRY').then(j => {
-    localStorage.setItem(FX_KEY, JSON.stringify({ t: now, rate: j.rates.TRY, date: j.date }));
-  }).catch(() => fetchJSON('https://open.er-api.com/v6/latest/EUR').then(j => {
-    localStorage.setItem(FX_KEY, JSON.stringify({ t: now, rate: j.rates.TRY, date: new Date(now).toISOString().slice(0, 10) }));
+  const base = S.settings.base, quote = S.settings.quote, pair = base + '/' + quote;
+  if (base !== quote && (force || !fx || fx.pair !== pair || now - fx.t > 60 * 60000)) jobs.push(fetchJSON('https://api.frankfurter.dev/v1/latest?base=' + base + '&symbols=' + quote).then(j => {
+    if (!(j.rates && j.rates[quote] > 0)) throw new Error('no rate');
+    localStorage.setItem(FX_KEY, JSON.stringify({ t: now, pair, rate: j.rates[quote], date: j.date }));
+  }).catch(() => fetchJSON('https://open.er-api.com/v6/latest/' + base).then(j => {
+    if (!(j.rates && j.rates[quote] > 0)) throw new Error('no rate');
+    localStorage.setItem(FX_KEY, JSON.stringify({ t: now, pair, rate: j.rates[quote], date: new Date(now).toISOString().slice(0, 10) }));
   })).catch(() => {}));
   if (jobs.length) { await Promise.all(jobs); updateInfo(); }
 }
@@ -542,7 +553,10 @@ function viewSettings() {
     '<button class="btn" id="testN">Test local notification</button></section>' +
     '<section class="card" style="gap:10px"><h2>Appearance & Today info</h2>' +
     '<label class="sub" for="s-theme">Theme</label><select id="s-theme">' + [['dark', 'Dark'], ['light', 'Light'], ['auto', 'Automatic']].map(o => '<option value="' + o[0] + '"' + (S.settings.theme === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
-    '<label class="sub" for="s-city">Weather city</label><select id="s-city">' + Object.keys(CITIES).map(c => '<option' + (S.settings.city === c ? ' selected' : '') + '>' + c + '</option>').join('') + '</select>' +
+    '<label class="sub" for="s-city">Weather city (all 81 provinces)</label><select id="s-city">' + PROVINCES.map(p => p[0]).sort((a, b) => a.localeCompare(b, 'tr')).map(c => '<option' + (S.settings.city === c ? ' selected' : '') + '>' + c + '</option>').join('') + '</select>' +
+    '<label class="sub" for="s-pair">Exchange rate</label><select id="s-pair">' + PAIRS.map(p => '<option value="' + p.join('/') + '"' + (!customPair && S.settings.base === p[0] && S.settings.quote === p[1] ? ' selected' : '') + '>' + p.join(' / ') + '</option>').join('') + '<option value="custom"' + (customPair || !PAIRS.some(p => p[0] === S.settings.base && p[1] === S.settings.quote) ? ' selected' : '') + '>Other pair…</option></select>' +
+    (customPair || !PAIRS.some(p => p[0] === S.settings.base && p[1] === S.settings.quote) ? '<div class="g2"><div><label class="sub" for="s-base">From</label><select id="s-base">' + CURRENCIES.map(c => '<option' + (S.settings.base === c ? ' selected' : '') + '>' + c + '</option>').join('') + '</select></div>' +
+    '<div><label class="sub" for="s-quote">To</label><select id="s-quote">' + CURRENCIES.map(c => '<option' + (S.settings.quote === c ? ' selected' : '') + '>' + c + '</option>').join('') + '</select></div></div>' : '') +
     '<label class="sub" for="s-zone">Second clock</label><select id="s-zone">' + ZONES.map(z => '<option value="' + z[1] + '"' + (S.settings.zone === z[1] ? ' selected' : '') + '>' + z[0] + '</option>').join('') + '</select></section>' +
     '<section class="card" style="gap:10px"><h2>Backup</h2><div class="sub">Your data lives only on this phone. Export a copy now and then.</div>' +
     '<button class="btn pri" id="exp">Export backup (JSON)</button><label class="btn" style="display:flex;align-items:center;justify-content:center">Import backup<input type="file" id="imp" accept="application/json,.json" hidden></label></section>' +
@@ -556,6 +570,9 @@ function bindSettings() {
   $('#testN').onclick = () => { const p = S.settings.notify; S.settings.notify = true; notify('FocusDay', 'Notifications work 🎉', 'test'); S.settings.notify = p; };
   $('#s-theme').onchange = e => { S.settings.theme = e.target.value; save(); applyTheme(); render(); };
   $('#s-city').onchange = e => { S.settings.city = e.target.value; save(); refreshInfo(true); };
+  $('#s-pair').onchange = e => { if (e.target.value === 'custom') { customPair = true; render(); return; } customPair = false; const [b, q] = e.target.value.split('/'); S.settings.base = b; S.settings.quote = q; save(); refreshInfo(true); render(); };
+  if ($('#s-base')) $('#s-base').onchange = e => { S.settings.base = e.target.value; save(); refreshInfo(true); };
+  if ($('#s-quote')) $('#s-quote').onchange = e => { S.settings.quote = e.target.value; save(); refreshInfo(true); };
   $('#s-zone').onchange = e => { S.settings.zone = e.target.value; save(); };
   $('#exp').onclick = () => {
     const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' }), a = document.createElement('a');
