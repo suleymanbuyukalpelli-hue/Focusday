@@ -1,6 +1,7 @@
 'use strict';
 /* FocusDay — personal planner PWA. Data stays on the phone (localStorage). */
 const KEY = 'focusday.v1';
+const BUILD = '2026-11-18 · v6';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -561,13 +562,18 @@ function viewSettings() {
     '<section class="card" style="gap:10px"><h2>Backup</h2><div class="sub">Your data lives only on this phone. Export a copy now and then.</div>' +
     '<button class="btn pri" id="exp">Export backup (JSON)</button><label class="btn" style="display:flex;align-items:center;justify-content:center">Import backup<input type="file" id="imp" accept="application/json,.json" hidden></label></section>' +
     '<section class="card" style="gap:10px"><h2>Reset</h2><button class="btn" id="wipe" style="color:var(--danger)">Delete all data</button></section>' +
-    '<div class="sub" style="text-align:center">FocusDay 1.0</div>';
+    '<section class="card" style="gap:10px"><h2>App version</h2><div class="sub">FocusDay ' + BUILD + '</div><button class="btn" id="upd">Check for updates</button></section>';
 }
 function bindSettings() {
   if ($('#perm')) $('#perm').onclick = enablePush;
   if ($('#offP')) $('#offP').onclick = disablePush;
   if ($('#testS')) $('#testS').onclick = async () => { await syncNow(); const r = await serverCall('/test', {}).catch(() => ({})); toast(r && r.ok ? 'Sent — check your lock screen' : 'Server could not send (' + (r && (r.status || r.error) || 'no reply') + ')', null); };
   $('#testN').onclick = () => { const p = S.settings.notify; S.settings.notify = true; notify('FocusDay', 'Notifications work 🎉', 'test'); S.settings.notify = p; };
+  $('#upd').onclick = async () => {
+    toast('Updating…', null);
+    try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); for (const k of await caches.keys()) await caches.delete(k); } catch (_) { /* ignore */ }
+    location.reload();
+  };
   $('#s-theme').onchange = e => { S.settings.theme = e.target.value; save(); applyTheme(); render(); };
   $('#s-city').onchange = e => { S.settings.city = e.target.value; save(); refreshInfo(true); };
   $('#s-pair').onchange = e => { if (e.target.value === 'custom') { customPair = true; render(); return; } customPair = false; const [b, q] = e.target.value.split('/'); S.settings.base = b; S.settings.quote = q; save(); refreshInfo(true); render(); };
@@ -613,4 +619,8 @@ setInterval(onTick, 500);
 setInterval(checkReminders, 20000);
 setInterval(updateInfo, 30000);
 render(); checkReminders(); refreshInfo();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } }); // a new version took over: load it
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
