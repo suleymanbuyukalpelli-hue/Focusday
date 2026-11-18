@@ -1,7 +1,7 @@
 'use strict';
 /* FocusDay — personal planner PWA. Data stays on the phone (localStorage). */
 const KEY = 'focusday.v1';
-const BUILD = '2026-11-18 · v6';
+const BUILD = '2026-11-18 · v7';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -19,7 +19,7 @@ const UNITS = ['pages', 'km', 'min', 'hours', 'times', 'glasses', 'count'];
 const typeOf = id => TYPES.find(t => t[0] === id) || TYPES[0];
 
 const DEFAULT = {
-  tasks: [], habits: [
+  tasks: [], lists: [], notes: [], habits: [
     { id: uid(), title: 'Read', goal: 20, unit: 'pages', log: {} },
     { id: uid(), title: 'Run', goal: 1, unit: 'km', log: {} },
     { id: uid(), title: 'Brush teeth', goal: 3, unit: 'times', log: {} }
@@ -522,7 +522,7 @@ function viewReport() {
   const planned = keys.reduce((n, k) => n + S.tasks.filter(t => occursOn(t, k) && k <= dkey()).length, 0);
   const passed = Math.max(1, keys.filter(k => k <= dkey()).length);
   const best = mins.indexOf(Math.max(...mins));
-  let h = '<h1>Weekly report</h1><div class="sub">' + days[0].toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' – ' + days[6].toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + '</div>';
+  let h = '<button class="btn" data-go="more" style="align-self:flex-start">‹ More</button><h1>Weekly report</h1><div class="sub">' + days[0].toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' – ' + days[6].toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + '</div>';
   h += '<section class="card" style="gap:10px"><div class="grid3"><div class="stat"><b>' + fmtMin(totalMin) + '</b><span class="sub">Focus time</span></div><div class="stat"><b>' + poms + '</b><span class="sub">Pomodoros</span></div><div class="stat"><b>' + doneTasks + '/' + planned + '</b><span class="sub">Tasks done</span></div></div>' +
     '<div class="bars" role="img" aria-label="Focus minutes per day">' + mins.map((m, i) => '<div><span>' + (m || '') + '</span><b style="height:' + Math.round(100 * m / maxMin) + '%"></b><span>' + names[i] + '</span></div>').join('') + '</div>' +
     (totalMin ? '<div class="sub">Best day: ' + days[best].toLocaleDateString('en-GB', { weekday: 'long' }) + ' (' + fmtMin(mins[best]) + ')</div>' : '<div class="sub">No focus sessions yet this week.</div>') + '</section>';
@@ -601,17 +601,186 @@ function bindSettings() {
   $('#wipe').onclick = () => { if (confirm('Delete ALL data? This cannot be undone.')) { localStorage.removeItem(KEY); load(); toast('All data deleted', null); render(); } };
 }
 
+/* ---------- More: lists, notes, calculator ---------- */
+let moreSub = null, openList = null, openNote = null;
+const calc = { expr: '', prev: '', eq: false, vat: 20 };
+const nf = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 8 });
+const BACK = '<button class="btn" data-back style="align-self:flex-start">‹ Back</button>';
+const listById = id => S.lists.find(x => x.id === id);
+const noteById = id => S.notes.find(x => x.id === id);
+function viewMore() {
+  if (moreSub === 'lists') return openList && listById(openList) ? viewListDetail() : viewLists();
+  if (moreSub === 'notes') return openNote && noteById(openNote) ? viewNoteEdit() : viewNotes();
+  if (moreSub === 'calc') return viewCalc();
+  const n = S.lists.length, m = S.notes.length;
+  const tile = (k, ic, t, s, attr) => '<button class="menu" ' + (attr || 'data-m="' + k + '"') + '><span class="ic" aria-hidden="true">' + ic + '</span><span class="mt"><b>' + t + '</b><span class="sub">' + s + '</span></span><span aria-hidden="true">›</span></button>';
+  return '<h1>More</h1><section class="card">' +
+    tile('lists', '🛒', 'Lists', n ? n + (n === 1 ? ' list' : ' lists') : 'Shopping, packing, anything with ticks') +
+    tile('notes', '📝', 'Notes', m ? m + (m === 1 ? ' note' : ' notes') : 'Quick notes') +
+    tile('calc', '🧮', 'Calculator', 'With VAT shortcuts') +
+    tile('report', '📊', 'Weekly report', 'Focus, tasks and habits', 'data-go="report"') + '</section>';
+}
+/* lists */
+function viewLists() {
+  let h = BACK + '<h1>Lists</h1><section class="card"><div class="row"><input type="text" id="nl" maxlength="60" placeholder="New list, e.g. Sunday market" aria-label="New list name"><button class="btn pri" id="nlAdd">Add</button></div></section>';
+  if (!S.lists.length) return h + '<div class="empty">No lists yet.</div>';
+  return h + '<section class="card">' + S.lists.map(l => { const d = l.items.filter(i => i.done).length; return '<button class="menu" data-ol="' + l.id + '"><span class="mt"><b>' + esc(l.title) + '</b><span class="sub">' + (l.items.length ? d + ' of ' + l.items.length + ' done' : 'Empty') + '</span></span><span aria-hidden="true">›</span></button>'; }).join('') + '</section>';
+}
+function viewListDetail() {
+  const l = listById(openList), open = l.items.filter(i => !i.done), done = l.items.filter(i => i.done);
+  const row = i => '<div class="item' + (i.done ? ' done' : '') + '"><button class="chk' + (i.done ? ' on' : '') + '" data-lt="' + i.id + '" role="checkbox" aria-checked="' + !!i.done + '" aria-label="' + esc(i.text) + '">' + (i.done ? '✓' : '') + '</button><span class="title" style="white-space:normal">' + esc(i.text) + '</span><button class="icon" data-ld="' + i.id + '" aria-label="Delete ' + esc(i.text) + '">✕</button></div>';
+  let h = BACK + '<h1 class="sr">List</h1><input type="text" id="ltitle" class="h1in" maxlength="60" value="' + esc(l.title) + '" aria-label="List name">' +
+    '<section class="card"><div class="row"><input type="text" id="li" maxlength="120" placeholder="Add item" aria-label="New item" enterkeyhint="done"><button class="btn pri" id="liAdd">Add</button></div></section>';
+  if (!l.items.length) return h + '<div class="empty">Nothing here yet. Add your first item.</div><button class="btn" id="ldel" style="color:var(--danger)">Delete list</button>';
+  h += '<section class="card">' + open.map(row).join('') + (done.length ? '<div class="sub" style="padding:10px 0 2px;border-top:1px solid var(--line)">Done · ' + done.length + '</div>' + done.map(row).join('') : '') + '</section>';
+  h += '<div class="g2">' + (done.length ? '<button class="btn" id="lclr">Clear ticked (' + done.length + ')</button>' : '<span></span>') + (done.length ? '<button class="btn" id="luncheck">Untick all</button>' : '<span></span>') + '</div>';
+  return h + '<button class="btn" id="ldel" style="color:var(--danger)">Delete list</button>';
+}
+/* notes */
+function viewNotes() {
+  let h = BACK + '<h1>Notes</h1><button class="btn pri big" id="nnew">+ New note</button>';
+  if (!S.notes.length) return h + '<div class="empty">No notes yet.</div>';
+  const list = S.notes.slice().sort((x, y) => y.updated - x.updated);
+  return h + '<section class="card">' + list.map(n => {
+    const first = (n.body || '').split('\n').find(s => s.trim()) || '';
+    return '<button class="menu" data-on="' + n.id + '"><span class="mt"><b>' + esc(n.title.trim() || first || 'Untitled') + '</b><span class="sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + new Date(n.updated).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + (n.title.trim() && first ? ' · ' + esc(first) : '') + '</span></span><span aria-hidden="true">›</span></button>';
+  }).join('') + '</section>';
+}
+function viewNoteEdit() {
+  const n = noteById(openNote);
+  return BACK + '<h1 class="sr">Note</h1><input type="text" id="ntitle" class="h1in" maxlength="80" placeholder="Title" value="' + esc(n.title) + '" aria-label="Note title">' +
+    '<textarea id="nbody" aria-label="Note text" placeholder="Write something…">' + esc(n.body) + '</textarea>' +
+    '<div class="sub" id="nsaved">Saved automatically</div><button class="btn" id="ndel" style="color:var(--danger)">Delete note</button>';
+}
+/* calculator */
+const OPS = '+−×÷';
+function calcEval(s) {
+  s = s.replace(/[+−×÷]$/, ''); if (!s) return null;
+  const t = s.match(/(?:\d+\.?\d*|\.\d+)%?|[+−×÷]/g); if (!t || t.join('') !== s) return null;
+  let i = 0;
+  const num = () => { let k = t[i++], neg = false; if (k === '−') { neg = true; k = t[i++]; } if (k === undefined || OPS.includes(k)) throw 0; const v = parseFloat(k); return { v: neg ? -v : v, pct: k.endsWith('%') }; };
+  const term = () => {
+    const a = num(); let v = a.v, single = true;
+    while (t[i] === '×' || t[i] === '÷') {
+      const op = t[i++], b = num(); if (single) { if (a.pct) v = v / 100; single = false; }
+      const bv = b.pct ? b.v / 100 : b.v; if (op === '÷' && bv === 0) throw 0; v = op === '×' ? v * bv : v / bv;
+    }
+    return { v, pct: single && a.pct };
+  };
+  try {
+    const f = term(); let acc = f.pct ? f.v / 100 : f.v;
+    while (i < t.length) {
+      const op = t[i++]; if (op !== '+' && op !== '−') throw 0;
+      const r = term(), rv = r.pct ? acc * r.v / 100 : r.v; acc = op === '+' ? acc + rv : acc - rv;
+    }
+    if (!isFinite(acc) || Math.abs(acc) >= 1e15) return null;
+    return Math.round(acc * 1e8) / 1e8;
+  } catch (_) { return null; }
+}
+const calcStr = v => String(v).replace('-', '−');
+const calcNum = () => calc.eq ? parseFloat(calc.expr.replace('−', '-')) : calcEval(calc.expr);
+function calcDisp() {
+  const hasOp = /[+−×÷%]/.test(calc.expr.slice(1)) || /%$/.test(calc.expr), v = !calc.eq && hasOp ? calcEval(calc.expr) : null;
+  return { prev: calc.prev, expr: calc.expr ? calc.expr.replace(/\./g, ',') : '0', res: v === null ? '' : '= ' + nf.format(v) };
+}
+function calcShow() { const d = calcDisp(); $('#cprev').textContent = d.prev; $('#cexpr').textContent = d.expr; $('#cres').textContent = d.res; }
+function calcPress(k) {
+  let e = calc.expr; const last = e.slice(-1);
+  const fresh = () => { if (calc.eq) { calc.expr = ''; calc.prev = ''; calc.eq = false; e = ''; } };
+  if (k === 'AC') { calc.expr = ''; calc.prev = ''; calc.eq = false; }
+  else if (k === '⌫') { if (calc.eq) { calc.expr = ''; calc.prev = ''; calc.eq = false; } else calc.expr = e.slice(0, -1); }
+  else if (/^\d$/.test(k)) { fresh(); if (e.slice(-1) === '%') return; const m = e.match(/\d*\.?\d*$/)[0]; if (m === '0') e = e.slice(0, -1); calc.expr = e + k; }
+  else if (k === '.') { fresh(); if (e.slice(-1) === '%') return; const m = e.match(/\d*\.?\d*$/)[0]; if (m.includes('.')) return; calc.expr = e + (m ? '.' : '0.'); }
+  else if (OPS.includes(k)) {
+    if (calc.eq) { calc.eq = false; calc.prev = ''; }
+    if (!e) { if (k === '−') calc.expr = '−'; } else if (e !== '−') { if (OPS.includes(last)) e = e.slice(0, -1); calc.expr = e + k; }
+  }
+  else if (k === '%') { if (calc.eq) { calc.eq = false; calc.prev = ''; } if (/\d$/.test(calc.expr)) calc.expr += '%'; }
+  else if (k === '=') {
+    if (calc.eq || !/[+−×÷%]/.test(e.slice(1)) && !/%$/.test(e)) return;
+    const v = calcEval(e); if (v === null) { toast('Check the calculation', null); return; }
+    calc.prev = e.replace(/\./g, ',') + ' ='; calc.expr = calcStr(v); calc.eq = true;
+  }
+  calcShow();
+}
+function calcVat(add) {
+  const v = calcNum(); if (v === null || isNaN(v)) { toast('Enter a number first', null); return; }
+  const r = calc.vat / 100, nv = Math.round((add ? v * (1 + r) : v / (1 + r)) * 100) / 100;
+  calc.prev = nf.format(v) + (add ? ' + ' : ' − ') + 'VAT ' + calc.vat + '% ='; calc.expr = calcStr(nv); calc.eq = true; calcShow();
+}
+function viewCalc() {
+  const d = calcDisp();
+  const K = (k, label, cls, aria) => '<button data-k="' + k + '" class="' + (cls || '') + '"' + (aria ? ' aria-label="' + aria + '"' : '') + '>' + (label || k) + '</button>';
+  return BACK + '<h1>Calculator</h1>' +
+    '<div class="cdisp" aria-live="polite"><div class="sub" id="cprev">' + esc(d.prev) + '</div><div class="cexpr" id="cexpr">' + esc(d.expr) + '</div><div class="cres" id="cres">' + esc(d.res) + '</div></div>' +
+    '<div class="keys">' + K('AC', 'AC', 'fn') + K('⌫', '⌫', 'fn', 'Backspace') + K('%', '%', 'fn', 'Percent') + K('÷', '÷', 'op', 'Divide') +
+    K('7') + K('8') + K('9') + K('×', '×', 'op', 'Multiply') + K('4') + K('5') + K('6') + K('−', '−', 'op', 'Minus') +
+    K('1') + K('2') + K('3') + K('+', '+', 'op', 'Plus') + K('0', '0', 'w2') + K('.', ',', '', 'Decimal comma') + K('=', '=', 'eq', 'Equals') + '</div>' +
+    '<section class="card" style="gap:8px"><h2>VAT (KDV)</h2><div class="chips" role="group" aria-label="VAT rate">' + [1, 10, 20].map(r => '<button class="chip' + (calc.vat === r ? ' sel' : '') + '" data-vr="' + r + '" aria-pressed="' + (calc.vat === r) + '">' + r + '%</button>').join('') + '</div>' +
+    '<div class="g2"><button class="btn" id="vAdd">+ VAT</button><button class="btn" id="vSub">− VAT</button></div><button class="btn" id="cCopy">Copy result</button></section>';
+}
+function bindMore() {
+  document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { moreSub = b.dataset.m; openList = openNote = null; render(); window.scrollTo(0, 0); });
+  if ($('[data-back]')) $('[data-back]').onclick = () => {
+    if (openNote) { const n = noteById(openNote); if (n && !n.title.trim() && !n.body.trim()) { S.notes.splice(S.notes.indexOf(n), 1); save(); } openNote = null; }
+    else if (openList) openList = null; else moreSub = null;
+    render(); window.scrollTo(0, 0);
+  };
+  const enter = (sel, btn) => { const el = $(sel); if (el) el.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $(btn).click(); } }; };
+  /* lists */
+  if ($('#nlAdd')) {
+    enter('#nl', '#nlAdd');
+    $('#nlAdd').onclick = () => { const v = $('#nl').value.trim(); if (!v) { $('#nl').focus(); return; } const l = { id: uid(), title: v, items: [], created: Date.now() }; S.lists.unshift(l); openList = l.id; save(); render(); $('#li').focus(); };
+  }
+  document.querySelectorAll('[data-ol]').forEach(b => b.onclick = () => { openList = b.dataset.ol; render(); window.scrollTo(0, 0); });
+  if (moreSub === 'lists' && openList && listById(openList)) {
+    const id = openList;
+    enter('#li', '#liAdd');
+    $('#liAdd').onclick = () => { const v = $('#li').value.trim(); if (!v) { $('#li').focus(); return; } listById(id).items.push({ id: uid(), text: v, done: false }); save(); render(); $('#li').focus(); };
+    $('#ltitle').onchange = e => { const l = listById(id); l.title = e.target.value.trim() || 'Untitled'; e.target.value = l.title; save(); };
+    document.querySelectorAll('[data-lt]').forEach(b => b.onclick = () => { const i = listById(id).items.find(x => x.id === b.dataset.lt); if (i) { i.done = !i.done; save(); render(); } });
+    document.querySelectorAll('[data-ld]').forEach(b => b.onclick = () => {
+      const l = listById(id), idx = l.items.findIndex(x => x.id === b.dataset.ld), it = l.items[idx]; if (!it) return;
+      l.items.splice(idx, 1); save(); render(); toast('"' + it.text + '" deleted', () => { const q = listById(id); if (q) { q.items.splice(Math.min(idx, q.items.length), 0, it); save(); render(); } });
+    });
+    if ($('#lclr')) $('#lclr').onclick = () => { const l = listById(id), snap = l.items.slice(), n = l.items.filter(x => x.done).length; l.items = l.items.filter(x => !x.done); save(); render(); toast(n + ' ticked items cleared', () => { const q = listById(id); if (q) { q.items = snap; save(); render(); } }); };
+    if ($('#luncheck')) $('#luncheck').onclick = () => { listById(id).items.forEach(x => { x.done = false; }); save(); render(); };
+    $('#ldel').onclick = () => { const idx = S.lists.findIndex(x => x.id === id), l = S.lists[idx]; S.lists.splice(idx, 1); openList = null; save(); render(); toast('"' + l.title + '" deleted', () => { S.lists.splice(Math.min(idx, S.lists.length), 0, l); save(); render(); }); };
+  }
+  /* notes */
+  if ($('#nnew')) $('#nnew').onclick = () => { const n = { id: uid(), title: '', body: '', updated: Date.now() }; S.notes.unshift(n); openNote = n.id; save(); render(); $('#ntitle').focus(); };
+  document.querySelectorAll('[data-on]').forEach(b => b.onclick = () => { openNote = b.dataset.on; render(); window.scrollTo(0, 0); });
+  if (moreSub === 'notes' && openNote && noteById(openNote)) {
+    const id = openNote, edit = f => e => { const n = noteById(id); if (!n) return; n[f] = e.target.value; n.updated = Date.now(); save(); $('#nsaved').textContent = 'Saved ' + fmtClock(n.updated); };
+    $('#ntitle').oninput = edit('title'); $('#nbody').oninput = edit('body');
+    enter('#ntitle', '#nbody');
+    $('#ntitle').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('#nbody').focus(); } };
+    $('#ndel').onclick = () => { const idx = S.notes.findIndex(x => x.id === id), n = S.notes[idx]; S.notes.splice(idx, 1); openNote = null; save(); render(); toast('Note deleted', () => { S.notes.splice(Math.min(idx, S.notes.length), 0, n); save(); render(); }); };
+  }
+  /* calculator */
+  if (moreSub === 'calc') {
+    document.querySelectorAll('[data-k]').forEach(b => b.onclick = () => calcPress(b.dataset.k));
+    document.querySelectorAll('[data-vr]').forEach(b => b.onclick = () => { calc.vat = +b.dataset.vr; render(); });
+    $('#vAdd').onclick = () => calcVat(true); $('#vSub').onclick = () => calcVat(false);
+    $('#cCopy').onclick = async () => {
+      const v = calcNum(); if (v === null || isNaN(v)) { toast('Nothing to copy', null); return; }
+      try { await navigator.clipboard.writeText(String(v).replace('.', ',')); toast('Copied ' + nf.format(v), null); } catch (_) { toast('Copy is not available here', null); }
+    };
+  }
+}
+
 /* ---------- shell ---------- */
-const TABS = [['today', '☀️', 'Today'], ['plan', '🗓', 'Plan'], ['pomodoro', '⏱', 'Pomodoro'], ['report', '📊', 'Report'], ['settings', '⚙️', 'Settings']];
+const TABS = [['today', '☀️', 'Today'], ['plan', '🗓', 'Plan'], ['pomodoro', '⏱', 'Pomodoro'], ['more', '➕', 'More'], ['settings', '⚙️', 'Settings']];
 let tab = (location.hash || '#today').slice(1);
-if (!TABS.find(t => t[0] === tab)) tab = 'today';
-function go(t) { tab = t; location.hash = t; editing = false; window.scrollTo(0, 0); render(); }
+if (!TABS.find(t => t[0] === tab) && tab !== 'report') tab = 'today';
+function go(t) { if (t === 'more') { moreSub = null; openList = openNote = null; } tab = t; location.hash = t; editing = false; window.scrollTo(0, 0); render(); }
 function render() {
-  const view = $('#view'), views = { today: viewToday, plan: viewPlan, pomodoro: viewPomodoro, report: viewReport, settings: viewSettings };
-  const y = window.scrollY; view.innerHTML = views[tab]();
-  ({ today: bindToday, plan: bindPlan, pomodoro: bindPomodoro, settings: bindSettings }[tab] || (() => {}))();
-  $('#nav').innerHTML = TABS.map(t => '<button data-tab="' + t[0] + '" class="' + (t[0] === tab ? 'on' : '') + '"' + (t[0] === tab ? ' aria-current="page"' : '') + '><span aria-hidden="true">' + t[1] + '</span>' + t[2] + '</button>').join('');
+  const view = $('#view'), views = { today: viewToday, plan: viewPlan, pomodoro: viewPomodoro, report: viewReport, more: viewMore, settings: viewSettings };
+  const act = tab === 'report' ? 'more' : tab, y = window.scrollY; view.innerHTML = views[tab]();
+  ({ today: bindToday, plan: bindPlan, pomodoro: bindPomodoro, settings: bindSettings, more: bindMore }[tab] || (() => {}))();
+  $('#nav').innerHTML = TABS.map(t => '<button data-tab="' + t[0] + '" class="' + (t[0] === act ? 'on' : '') + '"' + (t[0] === act ? ' aria-current="page"' : '') + '><span aria-hidden="true">' + t[1] + '</span>' + t[2] + '</button>').join('');
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => go(b.dataset.tab));
+  document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
   window.scrollTo(0, y);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { load(); applyTheme(); refreshInfo(); if (S.timer.running) lockScreen(true); onTick(); render(); checkReminders(); } });

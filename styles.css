@@ -17,7 +17,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .btn.tom{background:var(--tom);border-color:var(--tom);color:#fff}
 .btn.big{min-height:54px;border-radius:16px;font-size:16px;font-weight:700}
 .icon{width:44px;height:44px;border:none;border-radius:12px;background:var(--dangerbg);color:var(--danger);font-size:18px;flex-shrink:0}
-input[type=text],input[type=time],input[type=number],input[type=date],select{font:inherit;min-height:44px;border:1.5px solid var(--border);border-radius:12px;padding:0 12px;background:var(--field);color:var(--ink);width:100%}
+input[type=text],input[type=time],input[type=number],input[type=date],select,textarea{font:inherit;min-height:44px;border:1.5px solid var(--border);border-radius:12px;padding:0 12px;background:var(--field);color:var(--ink);width:100%}
 input::placeholder{color:var(--mute)}
 .item{display:flex;align-items:center;gap:10px;min-height:52px;border-top:1px solid var(--line)}
 .item:first-of-type{border-top:none}
@@ -72,3 +72,24 @@ label.sw input{width:22px;height:22px;accent-color:var(--acc)}
 .link{background:none;border:none;text-align:left;padding:0;color:inherit;font:inherit;min-height:44px;display:flex;flex-direction:column;justify-content:center;min-width:0}
 .btn:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--acc-t);outline-offset:2px}
 .stat .sub{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+button{touch-action:manipulation}
+.row>input{flex:1;min-width:0}
+.h1in{font-size:28px;font-weight:800;letter-spacing:-.4px;border-color:transparent;background:transparent;padding:0 4px}
+.h1in:focus{background:var(--field);border-color:var(--border)}
+textarea{min-height:46vh;padding:12px;resize:vertical;line-height:1.45}
+.menu{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;border:none;border-top:1px solid var(--line);background:none;text-align:left;padding:8px 0;color:var(--ink)}
+.menu:first-child{border-top:none}
+.menu .ic{font-size:24px;width:32px;text-align:center}
+.menu .mt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.menu .mt b{font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cdisp{background:var(--card);border-radius:16px;padding:14px;min-height:130px;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-end;gap:4px;word-break:break-all;text-align:right}
+.cexpr{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15}
+.cres{font-size:20px;color:var(--mute);min-height:26px;font-variant-numeric:tabular-nums}
+.keys{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.keys button{min-height:58px;border:1.5px solid var(--border);border-radius:14px;background:var(--field);font-size:22px;font-weight:600;color:var(--ink)}
+.keys .op{background:var(--accbg);color:var(--acc-t);border-color:transparent}
+.keys .fn{background:var(--track);border-color:transparent}
+.keys .eq{background:var(--acc);color:#fff;border-color:var(--acc)}
+.keys .w2{grid-column:span 2}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
