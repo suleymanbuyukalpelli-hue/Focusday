@@ -56,3 +56,16 @@ label.sw input{width:22px;height:22px;accent-color:var(--acc)}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .stat{background:#F5F6F8;border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:2px}
 .stat b{font-size:22px}
+nav{grid-template-columns:repeat(5,1fr)}
+nav button{font-size:10.5px;padding:0}
+.bar{height:8px;background:#E4E7EC;border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok);border-radius:4px;transition:width .2s}
+.habit{display:flex;flex-direction:column;gap:8px;padding:10px 0;border-top:1px solid var(--line)}
+.habit:first-of-type{border-top:none}
+.habit input{flex:1;min-width:0}
+.mark{width:28px;height:28px;border-radius:50%;border:2px solid #C8CEDA;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0}
+.mark.on{background:var(--ok);border-color:var(--ok)}
+.link{background:none;border:none;text-align:left;padding:0;color:inherit;font:inherit;min-height:44px;display:flex;flex-direction:column;justify-content:center;min-width:0}
+.chip.sel{background:var(--acc);border-color:var(--acc);color:#fff}
+.banner.row{display:flex}
+.btn:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #AEB8FF;outline-offset:2px}
