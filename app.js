@@ -1,7 +1,7 @@
 'use strict';
 /* FocusDay — personal planner PWA. Data stays on the phone (localStorage). */
 const KEY = 'focusday.v1';
-const BUILD = '2026-11-19 · v8';
+const BUILD = '2026-11-19 · v9';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -15,6 +15,7 @@ const r2 = n => Math.round(n * 100) / 100;
 const fmtNum = n => String(r2(n));
 const TYPES = [['todo', '✅', 'Todo'], ['reminder', '⏰', 'Reminder'], ['meeting', '👥', 'Meeting'], ['appointment', '📅', 'Appointment'], ['trip', '✈️', 'Trip'], ['call', '📞', 'Call']];
 const REPEATS = [['none', 'No repeat'], ['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Every week'], ['monthly', 'Every month']];
+const PERS = [['day', 'per day'], ['week', 'per week'], ['month', 'per month']];
 const UNITS = ['pages', 'km', 'min', 'hours', 'times', 'glasses', 'count'];
 const TCOL = { todo: '#7C8CFF', reminder: '#FBBF24', meeting: '#A78BFA', appointment: '#F472B6', trip: '#2DD4BF', call: '#FB923C' };
 const tchip = t => '<span class="tdot" style="--tc:' + (TCOL[t.type] || TCOL.todo) + '" aria-hidden="true">' + typeOf(t.type)[1] + '</span>';
@@ -52,7 +53,7 @@ function migrate() {
   });
   (S.reminders || []).forEach(r => S.tasks.push({ id: r.id, title: r.title, type: 'reminder', date: today, time: r.time, repeat: 'daily', est: 0, doneDays: {}, created: Date.now() }));
   delete S.reminders;
-  S.habits.forEach(h => { h.unit = h.unit || 'times'; });
+  S.habits.forEach(h => { h.unit = h.unit || 'times'; h.per = h.per || 'day'; });
 }
 function applyTheme() {
   const t = S.settings.theme || 'dark'; document.documentElement.dataset.theme = t;
@@ -177,14 +178,26 @@ const taskMeta = t => [t.repeat === 'none' ? dayLabel(t.date) : repeatLabel(t.re
 
 /* ---------- habits (amount per day, with a unit) ---------- */
 const habitAmt = (h, day) => h.log[day] || 0;
-const habitMet = (h, day) => habitAmt(h, day) >= h.goal;
+const perOf = h => h.per || 'day';
+function periodKeys(h, day) { // all day keys of the day / week (Mon–Sun) / month that contains `day`
+  const per = perOf(h), d = pd(day);
+  if (per === 'day') return [day];
+  if (per === 'week') { const s = new Date(d); s.setDate(d.getDate() - (d.getDay() + 6) % 7); return Array.from({ length: 7 }, (_, i) => { const x = new Date(s); x.setDate(s.getDate() + i); return dkey(x); }); }
+  const y = d.getFullYear(), m = d.getMonth(), n = new Date(y, m + 1, 0).getDate();
+  return Array.from({ length: n }, (_, i) => dkey(new Date(y, m, i + 1)));
+}
+const periodAmt = (h, day) => periodKeys(h, day).reduce((a, k) => a + habitAmt(h, k), 0);
+const habitMet = (h, day) => periodAmt(h, day) >= h.goal;
 function habitStreak(h) {
-  let n = 0; const d = new Date();
-  if (!habitMet(h, dkey(d))) d.setDate(d.getDate() - 1); // today may still be in progress
-  while (habitMet(h, dkey(d))) { n++; d.setDate(d.getDate() - 1); }
+  const per = perOf(h), d = new Date(); let n = 0;
+  if (per === 'month') d.setDate(1);
+  const step = () => { if (per === 'day') d.setDate(d.getDate() - 1); else if (per === 'week') d.setDate(d.getDate() - 7); else d.setMonth(d.getMonth() - 1); };
+  if (!habitMet(h, dkey(d))) step(); // the current period may still be in progress
+  while (n < 1000 && habitMet(h, dkey(d))) { n++; step(); }
   return n;
 }
-function setHabit(id, fn) { const h = S.habits.find(x => x.id === id); if (!h) return; const k = dkey(); const v = fn(habitAmt(h, k)); if (v <= 0) delete h.log[k]; else h.log[k] = r2(v); if (habitMet(h, k)) { pulse = id; buzz(15); } save(); render(); }
+const streakText = (n, h) => n + '-' + perOf(h) + ' streak';
+function setHabit(id, fn) { const h = S.habits.find(x => x.id === id); if (!h) return; const k = dkey(), wasMet = habitMet(h, k); const v = fn(habitAmt(h, k)); if (v <= 0) delete h.log[k]; else h.log[k] = r2(v); if (habitMet(h, k) && !wasMet) { pulse = id; buzz(15); } save(); render(); }
 function removeHabit(id) {
   const i = S.habits.findIndex(x => x.id === id), it = S.habits[i]; if (i < 0) return;
   S.habits.splice(i, 1); save(); render();
@@ -262,7 +275,13 @@ function nudges() {
   const out = [], now = new Date(), today = dkey(now), hr = now.getHours(), wd = now.getDay();
   S.habits.forEach(x => {
     if (habitMet(x, today)) return;
-    const st = habitStreak(x), left = r2(x.goal - habitAmt(x, today));
+    const per = perOf(x), pa = periodAmt(x, today), left = r2(x.goal - pa);
+    if (per !== 'day') {
+      const rem = per === 'week' ? 7 - (now.getDay() + 6) % 7 : new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1;
+      if (rem <= 3) out.push(['⏳', x.title + ': ' + fmtNum(pa) + ' of ' + fmtNum(x.goal) + ' ' + x.unit + ' this ' + per + ' — ' + fmtNum(left) + ' left, ' + rem + (rem === 1 ? ' day' : ' days') + ' to go.']);
+      return;
+    }
+    const st = habitStreak(x);
     if (st >= 2 && hr >= 16) { out.push(['🔥', x.title + ': ' + st + '-day streak at risk — ' + fmtNum(left) + ' ' + x.unit + ' to go today.']); return; }
     const keys = Object.keys(x.log).sort(); if (keys.length < 5) return;
     let seen = 0, miss = 0; for (let i = 1; i <= 4; i++) { const d = new Date(now); d.setDate(d.getDate() - 7 * i); const k = dkey(d); if (k >= keys[0]) { seen++; if (!habitMet(x, k)) miss++; } }
@@ -318,9 +337,9 @@ function viewToday() {
   h += '<section class="card"><div class="row" style="padding-bottom:6px"><h2 class="sp">Habits</h2><button class="btn pri" data-newhabit="1">+ Add</button></div>';
   if (!S.habits.length) h += '<div class="empty">No habits yet.</div>';
   S.habits.forEach(x => {
-    const a = habitAmt(x, today), met = a >= x.goal, st = habitStreak(x), p = Math.min(100, Math.round(100 * a / x.goal));
+    const a = habitAmt(x, today), pa = periodAmt(x, today), per = perOf(x), met = pa >= x.goal, st = habitStreak(x), p = Math.min(100, Math.round(100 * pa / x.goal));
     h += '<div class="habit"><div class="row"><span class="mring' + (met ? ' on' : '') + (pulse === x.id ? ' pop' : '') + '" style="--p:' + p + '" aria-hidden="true"><i>' + (met ? '✓' : '') + '</i></span><div class="sp"><div class="title" style="white-space:normal">' + esc(x.title) + '</div>' +
-      '<div class="sub">' + (st >= 2 ? '<span class="flame">🔥 ' + st + '</span> ' : '') + fmtNum(a) + ' / ' + fmtNum(x.goal) + ' ' + esc(x.unit) + (met ? ' · done' : '') + (st >= 2 ? '' : st ? ' · ' + st + '-day streak' : '') + '</div></div>' +
+      '<div class="sub">' + (st >= 2 ? '<span class="flame">🔥 ' + st + '</span> ' : '') + fmtNum(pa) + ' / ' + fmtNum(x.goal) + ' ' + esc(x.unit) + (per === 'day' ? '' : ' this ' + per) + (per !== 'day' && a > 0 ? ' · today ' + fmtNum(a) : '') + (met ? ' · done' : '') + (st >= 2 ? '' : st ? ' · ' + streakText(st, x) : '') + '</div></div>' +
       (a > 0 ? '<button class="btn" data-hr="' + x.id + '" aria-label="Reset today: ' + esc(x.title) + '">Reset</button>' : '') +
       (editing ? '<button class="icon" data-hd="' + x.id + '" aria-label="Delete habit: ' + esc(x.title) + '">🗑</button>' : '') + '</div>' +
       '<form class="row" data-hf="' + x.id + '"><input type="text" inputmode="decimal" placeholder="How many ' + esc(x.unit) + '?" aria-label="Amount of ' + esc(x.unit) + ' for ' + esc(x.title) + '"><button class="btn pri" type="submit">Add</button>' + (met ? '' : '<button class="btn" type="button" data-hdone="' + x.id + '" aria-label="Mark done: ' + esc(x.title) + '">Done</button>') + '</form></div>';
@@ -329,7 +348,7 @@ function viewToday() {
 }
 function bindToday() {
   document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
-  document.querySelectorAll('[data-newhabit]').forEach(b => b.onclick = () => { hform = { id: null, title: '', goal: '1', unit: 'times' }; go('plan'); });
+  document.querySelectorAll('[data-newhabit]').forEach(b => b.onclick = () => { hform = { id: null, title: '', goal: '1', unit: 'times', per: 'day' }; go('plan'); });
   document.querySelectorAll('[data-newtask]').forEach(b => b.onclick = () => { form = blankForm(); go('plan'); });
   $('#toggleEdit').onclick = () => { editing = !editing; render(); };
   document.querySelectorAll('[data-tc]').forEach(b => b.onclick = () => toggleDone(b.dataset.tc, dkey()));
@@ -338,7 +357,7 @@ function bindToday() {
   document.querySelectorAll('[data-td]').forEach(b => b.onclick = () => removeTask(b.dataset.td));
   document.querySelectorAll('[data-hd]').forEach(b => b.onclick = () => removeHabit(b.dataset.hd));
   document.querySelectorAll('[data-hr]').forEach(b => b.onclick = () => setHabit(b.dataset.hr, () => 0));
-  document.querySelectorAll('[data-hdone]').forEach(b => b.onclick = () => { const x = S.habits.find(q => q.id === b.dataset.hdone); if (x) setHabit(x.id, a => Math.max(a, x.goal)); });
+  document.querySelectorAll('[data-hdone]').forEach(b => b.onclick = () => { const x = S.habits.find(q => q.id === b.dataset.hdone); if (x) setHabit(x.id, a => a + Math.max(0, x.goal - periodAmt(x, dkey()))); });
   document.querySelectorAll('[data-hf]').forEach(f => f.onsubmit = e => {
     e.preventDefault();
     const v = parseNum(f.querySelector('input').value);
@@ -383,7 +402,7 @@ function habitFormHTML() {
   const f = hform;
   return '<section class="card" style="gap:10px"><h2>' + (f.id ? 'Edit habit' : 'New habit') + '</h2>' +
     '<input type="text" id="h-title" value="' + esc(f.title) + '" placeholder="e.g. Read, Run, Brush teeth" aria-label="Habit name" maxlength="60" autocomplete="off">' +
-    '<div class="row"><input type="text" inputmode="decimal" id="h-goal" value="' + esc(f.goal) + '" aria-label="Daily goal" style="width:90px"><select id="h-unit" aria-label="Unit">' + UNITS.map(u => '<option' + (f.unit === u ? ' selected' : '') + '>' + u + '</option>').join('') + '</select><span class="sub">per day</span></div>' +
+    '<div class="hrow"><input type="text" inputmode="decimal" id="h-goal" value="' + esc(f.goal) + '" aria-label="Goal amount" maxlength="7" autocomplete="off"><select id="h-unit" aria-label="Unit">' + UNITS.map(u => '<option' + (f.unit === u ? ' selected' : '') + '>' + u + '</option>').join('') + '</select><select id="h-per" aria-label="Goal period">' + PERS.map(p => '<option value="' + p[0] + '"' + (f.per === p[0] ? ' selected' : '') + '>' + p[1] + '</option>').join('') + '</select></div>' +
     '<div class="row"><button class="btn pri sp" id="h-save">Save</button><button class="btn" id="h-cancel">Cancel</button></div></section>';
 }
 function bindHabitForm() {
@@ -391,13 +410,14 @@ function bindHabitForm() {
   $('#h-title').oninput = e => { f.title = e.target.value; };
   $('#h-goal').oninput = e => { f.goal = e.target.value; };
   $('#h-unit').onchange = e => { f.unit = e.target.value; };
+  $('#h-per').onchange = e => { f.per = e.target.value; };
   $('#h-cancel').onclick = () => { hform = null; render(); };
   $('#h-save').onclick = () => {
     const title = f.title.trim(), goal = parseNum(f.goal);
     if (!title) { toast('Give the habit a name', null); return; }
     if (!(goal > 0) || goal > 100000) { toast('Goal must be greater than 0', null); return; }
-    if (f.id) { const x = S.habits.find(q => q.id === f.id); if (x) Object.assign(x, { title: title.slice(0, 60), goal, unit: f.unit }); }
-    else S.habits.push({ id: uid(), title: title.slice(0, 60), goal, unit: f.unit, log: {} });
+    if (f.id) { const x = S.habits.find(q => q.id === f.id); if (x) Object.assign(x, { title: title.slice(0, 60), goal, unit: f.unit, per: f.per }); }
+    else S.habits.push({ id: uid(), title: title.slice(0, 60), goal, unit: f.unit, per: f.per, log: {} });
     hform = null; save(); render();
   };
 }
@@ -419,18 +439,18 @@ function viewPlan() {
   h += '<section class="card"><div class="row" style="padding-bottom:6px"><h2 class="sp">Habits</h2>' + (hform ? '' : '<button class="btn" id="newHabit">+ Add</button>') + '</div>';
   if (!S.habits.length) h += '<div class="empty">No habits yet.</div>';
   S.habits.forEach(x => {
-    h += '<div class="item"><button class="link sp" data-he="' + x.id + '"><div class="title" style="white-space:normal">' + esc(x.title) + '</div><div class="sub">' + fmtNum(x.goal) + ' ' + esc(x.unit) + ' per day</div></button>' +
+    h += '<div class="item"><button class="link sp" data-he="' + x.id + '"><div class="title" style="white-space:normal">' + esc(x.title) + '</div><div class="sub">' + fmtNum(x.goal) + ' ' + esc(x.unit) + ' per ' + perOf(x) + '</div></button>' +
       '<button class="icon" data-hd="' + x.id + '" aria-label="Delete habit: ' + esc(x.title) + '">🗑</button></div>';
   });
   return h + '</section>';
 }
 function bindPlan() {
   if ($('#newTask')) $('#newTask').onclick = () => { form = blankForm(); render(); };
-  if ($('#newHabit')) $('#newHabit').onclick = () => { hform = { id: null, title: '', goal: '1', unit: 'times' }; render(); };
+  if ($('#newHabit')) $('#newHabit').onclick = () => { hform = { id: null, title: '', goal: '1', unit: 'times', per: 'day' }; render(); };
   if (form) bindForm();
   if (hform) bindHabitForm();
   document.querySelectorAll('[data-te]').forEach(b => b.onclick = () => { const t = S.tasks.find(x => x.id === b.dataset.te); if (t) { form = formFrom(t); render(); window.scrollTo(0, 0); } });
-  document.querySelectorAll('[data-he]').forEach(b => b.onclick = () => { const x = S.habits.find(q => q.id === b.dataset.he); if (x) { hform = { id: x.id, title: x.title, goal: String(x.goal), unit: x.unit }; render(); window.scrollTo(0, 0); } });
+  document.querySelectorAll('[data-he]').forEach(b => b.onclick = () => { const x = S.habits.find(q => q.id === b.dataset.he); if (x) { hform = { id: x.id, title: x.title, goal: String(x.goal), unit: x.unit, per: perOf(x) }; render(); window.scrollTo(0, 0); } });
   document.querySelectorAll('[data-td]').forEach(b => b.onclick = () => removeTask(b.dataset.td));
   document.querySelectorAll('[data-hd]').forEach(b => b.onclick = () => removeHabit(b.dataset.hd));
 }
@@ -566,6 +586,14 @@ function viewReport() {
   h += '<section class="card"><h2 style="padding-bottom:6px">Habits this week</h2>';
   if (!S.habits.length) h += '<div class="empty">No habits.</div>';
   S.habits.forEach(x => {
+    const per = perOf(x);
+    if (per !== 'day') {
+      const pa = periodAmt(x, dkey()), ok = pa >= x.goal;
+      h += '<div class="item" style="flex-wrap:wrap;padding:8px 0"><span class="title">' + esc(x.title) + '</span><span class="pill" style="color:var(--ok)">' + (ok ? '✓ ' : '') + fmtNum(pa) + ' / ' + fmtNum(x.goal) + ' this ' + per + '</span>' +
+        '<div class="sub" style="width:100%">' + esc(x.unit) + ' · goal ' + fmtNum(x.goal) + ' per ' + per + '</div>' +
+        '<div class="heat" style="width:100%" role="img" aria-label="Days with activity this week">' + keys.map(k => '<i class="' + (habitAmt(x, k) > 0 ? 'l3' : '') + '"></i>').join('') + '</div></div>';
+      return;
+    }
     const met = keys.filter(k => habitMet(x, k)).length, tot = keys.reduce((a, k) => a + habitAmt(x, k), 0);
     h += '<div class="item" style="flex-wrap:wrap;padding:8px 0"><span class="title">' + esc(x.title) + '</span><span class="pill" style="color:var(--ok)">' + met + '/' + passed + ' days</span>' +
       '<div class="sub" style="width:100%">Total ' + fmtNum(tot) + ' ' + esc(x.unit) + ' · goal ' + fmtNum(x.goal) + '/day</div>' +

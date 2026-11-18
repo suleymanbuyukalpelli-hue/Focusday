@@ -127,3 +127,6 @@ main.in{animation:fadein .22s ease-out}
 @keyframes fall{to{transform:translate(var(--dx),105vh) rotate(540deg);opacity:.9}}
 @keyframes glow{from{filter:drop-shadow(0 0 0 rgba(255,255,255,0))}to{filter:drop-shadow(0 0 10px rgba(255,255,255,.7))}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.hrow{display:grid;grid-template-columns:84px minmax(0,1fr) minmax(0,1fr);gap:8px}
+.hrow input{text-align:center;font-size:20px;font-weight:700;padding:0 6px;width:100%;min-width:0}
