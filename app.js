@@ -24,8 +24,55 @@ function load() {
   S.settings = Object.assign({}, DEFAULT.settings, S.settings);
   S.timer = Object.assign({}, DEFAULT.timer, S.timer);
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_) { toast('Storage is full or blocked', null); } }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_) { toast('Storage is full or blocked', null); } scheduleSync(); }
 load();
+
+/* ---------- push server (lock-screen reminders) ---------- */
+const PUSH_URL = ''; // Cloudflare Worker address, e.g. https://focusday-push.<name>.workers.dev
+const VAPID_PUBLIC = 'BMmOAKt8mkdnZjmP3ev5nNZdTP4qDwerEc4irojjlxt__SmvXWo1FPXM8pgH4OmFc0AbWdrjcHB3oiO8InVjsOE';
+const SUBKEY = 'focusday.pushsub', DEVKEY = 'focusday.dev';
+function pushSub() { try { return JSON.parse(localStorage.getItem(SUBKEY)); } catch (_) { return null; } }
+function pushOn() { return !!(PUSH_URL && pushSub()); }
+function deviceId() {
+  let d = localStorage.getItem(DEVKEY);
+  if (!d) { d = Array.from(crypto.getRandomValues(new Uint8Array(18)), b => b.toString(36).padStart(2, '0')).join('').slice(0, 28) + uid() + uid(); localStorage.setItem(DEVKEY, d); }
+  return d;
+}
+const b64uToBytes = str => { str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '='; return Uint8Array.from(atob(str), c => c.charCodeAt(0)); };
+async function serverCall(path, body) {
+  const r = await fetch(PUSH_URL.replace(/\/$/, '') + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ deviceId: deviceId() }, body)) });
+  return r.json().catch(() => ({}));
+}
+let syncTimer;
+function scheduleSync() { if (!pushOn()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 1500); }
+async function syncNow() {
+  if (!pushOn()) return;
+  const T = S.timer;
+  try {
+    return await serverCall('/sync', {
+      sub: pushSub(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Istanbul',
+      reminders: S.reminders.map(r => ({ id: r.id, title: r.title, time: r.time })),
+      timer: T.running ? { endsAt: T.endsAt, phase: T.phase } : null
+    });
+  } catch (_) { /* offline: next change syncs again */ }
+}
+async function enablePush() {
+  if (!PUSH_URL) { toast('Push server address is not set yet', null); return; }
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) { toast('Open FocusDay from the Home Screen icon first (iOS 16.4+)', null); return; }
+  try {
+    if (Notification.permission !== 'granted') { const p = await Notification.requestPermission(); if (p !== 'granted') { toast('Notifications are blocked in iOS Settings', null); render(); return; } }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(VAPID_PUBLIC) });
+    localStorage.setItem(SUBKEY, JSON.stringify(sub.toJSON()));
+    const res = await syncNow();
+    toast(res && res.ok ? 'Lock-screen notifications enabled' : 'Could not reach the push server', null);
+  } catch (e) { toast('Could not enable: ' + (e && e.message || e), null); }
+  render();
+}
+async function disablePush() {
+  try { const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); await serverCall('/unsubscribe', {}); } catch (_) {}
+  localStorage.removeItem(SUBKEY); toast('Lock-screen notifications turned off', null); render();
+}
 
 /* ---------- toast with undo ---------- */
 let toastTimer;
@@ -162,7 +209,7 @@ function checkReminders() {
   S.reminders.forEach(r => {
     const k = r.id + '@' + day;
     if (r.time <= hm && !S.notified[k] && now.getHours() * 60 + now.getMinutes() - (+r.time.slice(0, 2) * 60 + +r.time.slice(3)) < 60) {
-      S.notified[k] = 1; save(); notify('Reminder', r.title, 'rem-' + r.id); toast('⏰ ' + r.title, null);
+      S.notified[k] = 1; save(); if (!pushOn()) notify('Reminder', r.title, 'rem-' + r.id); toast('⏰ ' + r.title, null);
     }
   });
   const keep = Object.keys(S.notified).filter(k => k.endsWith('@' + day));
@@ -211,9 +258,9 @@ function resetTimer() { const T = S.timer; T.running = false; T.phase = 'focus';
 function onTick() {
   const T = S.timer;
   if (T.running && remaining() <= 0) {
-    const was = T.phase; T.remaining = 0;
+    const was = T.phase, late = Date.now() - T.endsAt; T.remaining = 0;
     nextPhase(true);
-    notify(was === 'focus' ? 'Focus complete 🍅' : 'Break is over', was === 'focus' ? 'Time for a break.' : 'Ready for the next round?', 'timer');
+    if (!(pushOn() && late > 5000)) notify(was === 'focus' ? 'Focus complete 🍅' : 'Break is over', was === 'focus' ? 'Time for a break.' : 'Ready for the next round?', 'timer');
     try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (_) {}
     render(); return;
   }
@@ -264,7 +311,7 @@ function bindPomodoro() {
   $('#startPause').onclick = () => { if (fi) { T.label = fi.value.trim() || 'Free focus'; } T.running ? pauseTimer() : startTimer(); };
   $('#finish').onclick = finishNow; $('#reset').onclick = resetTimer;
   $('#wake').onchange = e => { S.settings.wake = e.target.checked; save(); if (T.running) lockScreen(e.target.checked); };
-  $('#ntf').onchange = e => { S.settings.notify = e.target.checked; save(); if (e.target.checked) askPermission(); };
+  $('#ntf').onchange = e => { S.settings.notify = e.target.checked; save(); };
   const dur = (id, k) => { $(id).onchange = e => { const v = Math.min(+e.target.max, Math.max(1, parseInt(e.target.value, 10) || DEFAULT.settings[k])); S.settings[k] = v; e.target.value = v; if (!T.running && !T.startedAt) T.remaining = phaseLen(T.phase); save(); render(); }; };
   dur('#dFocus', 'focus'); dur('#dBrk', 'brk'); dur('#dLong', 'long');
   document.querySelectorAll('[data-sd]').forEach(b => b.onclick = () => {
@@ -311,15 +358,19 @@ function viewSettings() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   return '<h1>Settings</h1>' +
-    '<section class="card" style="gap:10px"><h2>Notifications</h2><div class="sub">Status: ' + perm + (standalone ? '' : ' · open FocusDay from the Home Screen icon to enable') + '</div>' +
-    '<button class="btn pri" id="perm">Enable notifications</button><button class="btn" id="testN">Send test notification</button></section>' +
+    '<section class="card" style="gap:10px"><h2>Notifications</h2><div class="sub">Permission: ' + perm + (standalone ? '' : ' · open FocusDay from the Home Screen icon to enable') + '</div>' +
+    '<div class="sub">Lock-screen reminders: <b>' + (pushOn() ? 'on' : PUSH_URL ? 'off' : 'server not set up') + '</b></div>' +
+    (pushOn() ? '<button class="btn pri" id="testS">Send test from server</button><button class="btn" id="offP">Turn off lock-screen reminders</button>' : '<button class="btn pri" id="perm">Enable lock-screen reminders</button>') +
+    '<button class="btn" id="testN">Test local notification</button></section>' +
     '<section class="card" style="gap:10px"><h2>Backup</h2><div class="sub">Your data lives only on this phone. Export a copy now and then.</div>' +
     '<button class="btn pri" id="exp">Export backup (JSON)</button><label class="btn" style="display:flex;align-items:center;justify-content:center">Import backup<input type="file" id="imp" accept="application/json,.json" hidden></label></section>' +
     '<section class="card" style="gap:10px"><h2>Reset</h2><button class="btn" id="wipe" style="color:var(--danger)">Delete all data</button></section>' +
     '<div class="sub" style="text-align:center">FocusDay 1.0</div>';
 }
 function bindSettings() {
-  $('#perm').onclick = askPermission;
+  if ($('#perm')) $('#perm').onclick = enablePush;
+  if ($('#offP')) $('#offP').onclick = disablePush;
+  if ($('#testS')) $('#testS').onclick = async () => { await syncNow(); const r = await serverCall('/test', {}).catch(() => ({})); toast(r && r.ok ? 'Sent — check your lock screen' : 'Server could not send (' + (r && (r.status || r.error) || 'no reply') + ')', null); };
   $('#testN').onclick = () => { const p = S.settings.notify; S.settings.notify = true; notify('FocusDay', 'Notifications work 🎉', 'test'); S.settings.notify = p; };
   $('#exp').onclick = () => {
     const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' }), a = document.createElement('a');
