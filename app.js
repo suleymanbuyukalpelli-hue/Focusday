@@ -28,8 +28,7 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_
 load();
 
 /* ---------- push server (lock-screen reminders) ---------- */
-const PUSH_URL = ''; // Cloudflare Worker address, e.g. https://focusday-push.<name>.workers.dev
-const VAPID_PUBLIC = 'BMmOAKt8mkdnZjmP3ev5nNZdTP4qDwerEc4irojjlxt__SmvXWo1FPXM8pgH4OmFc0AbWdrjcHB3oiO8InVjsOE';
+const PUSH_URL = 'https://focusday-push.suleymanbuyukalpelli.workers.dev'; // Cloudflare Worker (source: server/worker.js)
 const SUBKEY = 'focusday.pushsub', DEVKEY = 'focusday.dev';
 function pushSub() { try { return JSON.parse(localStorage.getItem(SUBKEY)); } catch (_) { return null; } }
 function pushOn() { return !!(PUSH_URL && pushSub()); }
@@ -38,6 +37,7 @@ function deviceId() {
   if (!d) { d = Array.from(crypto.getRandomValues(new Uint8Array(18)), b => b.toString(36).padStart(2, '0')).join('').slice(0, 28) + uid() + uid(); localStorage.setItem(DEVKEY, d); }
   return d;
 }
+const bytesToB64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const b64uToBytes = str => { str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '='; return Uint8Array.from(atob(str), c => c.charCodeAt(0)); };
 async function serverCall(path, body) {
   const r = await fetch(PUSH_URL.replace(/\/$/, '') + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ deviceId: deviceId() }, body)) });
@@ -62,7 +62,11 @@ async function enablePush() {
   try {
     if (Notification.permission !== 'granted') { const p = await Notification.requestPermission(); if (p !== 'granted') { toast('Notifications are blocked in iOS Settings', null); render(); return; } }
     const reg = await navigator.serviceWorker.ready;
-    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(VAPID_PUBLIC) });
+    const { key } = await (await fetch(PUSH_URL + '/vapid-public-key')).json(); // server creates and keeps its own key pair
+    let sub = await reg.pushManager.getSubscription();
+    const cur = sub && sub.options && sub.options.applicationServerKey;
+    if (sub && cur && bytesToB64u(cur) !== key) { await sub.unsubscribe(); sub = null; } // server key changed: subscribe again
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
     localStorage.setItem(SUBKEY, JSON.stringify(sub.toJSON()));
     const res = await syncNow();
     toast(res && res.ok ? 'Lock-screen notifications enabled' : 'Could not reach the push server', null);
