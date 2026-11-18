@@ -1,7 +1,7 @@
 'use strict';
 /* FocusDay — personal planner PWA. Data stays on the phone (localStorage). */
 const KEY = 'focusday.v1';
-const BUILD = '2026-11-19 · v9';
+const BUILD = '2026-11-19 · v10';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -13,6 +13,8 @@ const fmtClock = ts => { const d = new Date(ts); return pad(d.getHours()) + ':' 
 const pd = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const r2 = n => Math.round(n * 100) / 100;
 const fmtNum = n => String(r2(n));
+const AREAS = [['work', '💼', 'Work', '#60A5FA'], ['personal', '🙂', 'Personal', '#F472B6'], ['home', '🏠', 'Home', '#34D399']];
+const areaOf = id => AREAS.find(x => x[0] === id);
 const TYPES = [['todo', '✅', 'Todo'], ['reminder', '⏰', 'Reminder'], ['meeting', '👥', 'Meeting'], ['appointment', '📅', 'Appointment'], ['trip', '✈️', 'Trip'], ['call', '📞', 'Call']];
 const REPEATS = [['none', 'No repeat'], ['daily', 'Every day'], ['weekdays', 'Weekdays'], ['weekly', 'Every week'], ['monthly', 'Every month']];
 const PERS = [['day', 'per day'], ['week', 'per week'], ['month', 'per month']];
@@ -22,12 +24,12 @@ const tchip = t => '<span class="tdot" style="--tc:' + (TCOL[t.type] || TCOL.tod
 const typeOf = id => TYPES.find(t => t[0] === id) || TYPES[0];
 
 const DEFAULT = {
-  tasks: [], lists: [], notes: [], habits: [
+  tasks: [], lists: [], notes: [], reviews: {}, habits: [
     { id: uid(), title: 'Read', goal: 20, unit: 'pages', log: {} },
     { id: uid(), title: 'Run', goal: 1, unit: 'km', log: {} },
     { id: uid(), title: 'Brush teeth', goal: 3, unit: 'times', log: {} }
   ], sessions: [], notified: {},
-  settings: { focus: 25, brk: 5, long: 15, wake: true, notify: true, theme: 'dark', city: 'İstanbul', zone: 'Europe/Berlin', base: 'EUR', quote: 'TRY' },
+  settings: { focus: 25, brk: 5, long: 15, wake: true, notify: true, theme: 'dark', dayView: 'list', area: '', city: 'İstanbul', zone: 'Europe/Berlin', base: 'EUR', quote: 'TRY' },
   timer: { phase: 'focus', running: false, endsAt: 0, remaining: 25 * 60, round: 1, taskId: null, free: true, label: 'Reading emails' }
 };
 let S;
@@ -47,13 +49,13 @@ function migrate() {
   const today = dkey();
   S.tasks.forEach(t => {
     if (!t.date) t.date = t.created ? dkey(new Date(t.created)) : today;
-    t.type = t.type || 'todo'; t.repeat = t.repeat || 'none'; t.time = t.time || '';
+    t.type = t.type || 'todo'; t.repeat = t.repeat || 'none'; t.time = t.time || ''; t.area = t.area || ''; t.notes = t.notes || ''; t.subs = t.subs || [];
     if (!t.doneDays) { t.doneDays = {}; if (t.done) t.doneDays[t.doneDay || t.date] = 1; }
     delete t.done; delete t.doneDay;
   });
   (S.reminders || []).forEach(r => S.tasks.push({ id: r.id, title: r.title, type: 'reminder', date: today, time: r.time, repeat: 'daily', est: 0, doneDays: {}, created: Date.now() }));
   delete S.reminders;
-  S.habits.forEach(h => { h.unit = h.unit || 'times'; h.per = h.per || 'day'; });
+  S.habits.forEach(h => { h.unit = h.unit || 'times'; h.per = h.per || 'day'; h.skips = h.skips || {}; }); S.reviews = S.reviews || {};
 }
 function applyTheme() {
   const t = S.settings.theme || 'dark'; document.documentElement.dataset.theme = t;
@@ -174,7 +176,7 @@ const dayLabel = day => {
   return pd(day).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 };
 const repeatLabel = r => (REPEATS.find(x => x[0] === r) || REPEATS[0])[1];
-const taskMeta = t => [t.repeat === 'none' ? dayLabel(t.date) : repeatLabel(t.repeat), t.time || 'All day'].join(' · ');
+const taskMeta = t => { const ar = areaOf(t.area), ns = (t.subs || []).length; return [t.repeat === 'none' ? dayLabel(t.date) : repeatLabel(t.repeat), t.time || 'All day'].concat(ns ? ['☑ ' + t.subs.filter(s => s.done).length + '/' + ns] : [], t.notes ? ['📝'] : [], ar ? [ar[1] + ' ' + ar[2]] : []).join(' · '); };
 
 /* ---------- habits (amount per day, with a unit) ---------- */
 const habitAmt = (h, day) => h.log[day] || 0;
@@ -188,10 +190,16 @@ function periodKeys(h, day) { // all day keys of the day / week (Mon–Sun) / mo
 }
 const periodAmt = (h, day) => periodKeys(h, day).reduce((a, k) => a + habitAmt(h, k), 0);
 const habitMet = (h, day) => periodAmt(h, day) >= h.goal;
+const habitSkipped = (h, day) => !!(h.skips && h.skips[day]);
 function habitStreak(h) {
-  const per = perOf(h), d = new Date(); let n = 0;
+  const per = perOf(h), d = new Date(); let n = 0, g = 0;
   if (per === 'month') d.setDate(1);
   const step = () => { if (per === 'day') d.setDate(d.getDate() - 1); else if (per === 'week') d.setDate(d.getDate() - 7); else d.setMonth(d.getMonth() - 1); };
+  if (per === 'day') {
+    if (!habitMet(h, dkey(d)) && !habitSkipped(h, dkey(d))) step(); // today may still be in progress
+    while (g++ < 2000) { const k = dkey(d); if (habitMet(h, k)) n++; else if (!habitSkipped(h, k)) break; step(); }
+    return n;
+  }
   if (!habitMet(h, dkey(d))) step(); // the current period may still be in progress
   while (n < 1000 && habitMet(h, dkey(d))) { n++; step(); }
   return n;
@@ -208,11 +216,13 @@ const parseNum = v => { const n = parseFloat(String(v).replace(',', '.')); retur
 /* ---------- forms state (Plan tab) ---------- */
 let form = null, hform = null, editing = false;
 const next7 = () => Array.from({ length: 7 }, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return dkey(d); });
-const blankForm = () => ({ id: null, title: '', type: 'todo', date: dkey(), other: false, hasTime: false, time: '09:00', repeat: 'none' });
-function formFrom(t) { return { id: t.id, title: t.title, type: t.type, date: t.date, other: !next7().includes(t.date), hasTime: !!t.time, time: t.time || '09:00', repeat: t.repeat }; }
+const blankForm = () => ({ id: null, title: '', type: 'todo', date: dkey(), other: false, hasTime: false, time: '09:00', repeat: 'none', area: S.settings.area || '', notes: '', checklist: '', more: false });
+function formFrom(t) { return { id: t.id, title: t.title, type: t.type, date: t.date, other: !next7().includes(t.date), hasTime: !!t.time, time: t.time || '09:00', repeat: t.repeat, area: t.area || '', notes: t.notes || '', checklist: (t.subs || []).map(s => s.text).join('\n'), more: false }; }
 function saveForm() {
   const f = form, title = f.title.trim(); if (!title) { toast('Give the task a title', null); return; }
-  const rec = { title: title.slice(0, 120), type: f.type, date: f.date || dkey(), time: f.hasTime ? f.time : '', repeat: f.repeat };
+  const old = f.id ? (S.tasks.find(x => x.id === f.id) || {}).subs || [] : [];
+  const subs = f.checklist.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 50).map(text => { const o = old.find(s => s.text === text); return { id: o ? o.id : uid(), text: text.slice(0, 120), done: o ? !!o.done : false }; });
+  const rec = { title: title.slice(0, 120), type: f.type, date: f.date || dkey(), time: f.hasTime ? f.time : '', repeat: f.repeat, area: f.area || '', notes: f.notes.trim().slice(0, 1000), subs };
   if (f.id) { const t = S.tasks.find(x => x.id === f.id); if (t) Object.assign(t, rec); }
   else S.tasks.push(Object.assign({ id: uid(), doneDays: {}, created: Date.now(), est: 0 }, rec));
   form = null; save(); render();
@@ -268,13 +278,14 @@ async function refreshInfo(force) {
 
 /* ---------- progress + smart nudges (rule-based, on-device) ---------- */
 function dayProgress() {
-  const today = dkey(), ts = tasksFor(today), done = ts.filter(t => isDone(t, today)).length + S.habits.filter(x => habitMet(x, today)).length, total = ts.length + S.habits.length;
+  const today = dkey(), ts = tasksFor(today), hs = S.habits.filter(x => !(perOf(x) === 'day' && !habitMet(x, today) && habitSkipped(x, today)));
+  const done = ts.filter(t => isDone(t, today)).length + hs.filter(x => habitMet(x, today)).length, total = ts.length + hs.length;
   return { done, total, pct: total ? Math.round(100 * done / total) : 0 };
 }
 function nudges() {
   const out = [], now = new Date(), today = dkey(now), hr = now.getHours(), wd = now.getDay();
   S.habits.forEach(x => {
-    if (habitMet(x, today)) return;
+    if (habitMet(x, today) || (perOf(x) === 'day' && habitSkipped(x, today))) return;
     const per = perOf(x), pa = periodAmt(x, today), left = r2(x.goal - pa);
     if (per !== 'day') {
       const rem = per === 'week' ? 7 - (now.getDay() + 6) % 7 : new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1;
@@ -284,7 +295,7 @@ function nudges() {
     const st = habitStreak(x);
     if (st >= 2 && hr >= 16) { out.push(['🔥', x.title + ': ' + st + '-day streak at risk — ' + fmtNum(left) + ' ' + x.unit + ' to go today.']); return; }
     const keys = Object.keys(x.log).sort(); if (keys.length < 5) return;
-    let seen = 0, miss = 0; for (let i = 1; i <= 4; i++) { const d = new Date(now); d.setDate(d.getDate() - 7 * i); const k = dkey(d); if (k >= keys[0]) { seen++; if (!habitMet(x, k)) miss++; } }
+    let seen = 0, miss = 0; for (let i = 1; i <= 4; i++) { const d = new Date(now); d.setDate(d.getDate() - 7 * i); const k = dkey(d); if (k >= keys[0] && !habitSkipped(x, k)) { seen++; if (!habitMet(x, k)) miss++; } }
     if (seen >= 3 && miss >= 3) out.push(['🧠', 'You often skip "' + x.title + '" on ' + now.toLocaleDateString('en-GB', { weekday: 'long' }) + 's — do it early today.']);
   });
   const tm = new Date(now); tm.setDate(tm.getDate() + 1); const tl = tasksFor(dkey(tm));
@@ -292,6 +303,8 @@ function nudges() {
   const mins = S.sessions.filter(s => dkey(new Date(s.start)) === today).reduce((q, s) => q + s.dur, 0);
   if (mins > 0) out.push(['⏱', fmtMin(mins) + ' of focus today. Nice rhythm.']);
   else if (hr >= 13 && hr < 20 && wd >= 1 && wd <= 5) out.push(['⏱', 'No focus session yet today — one 25-minute round is enough to start.']);
+  const yd = new Date(now); yd.setDate(yd.getDate() - 1); const yr2 = S.reviews[dkey(yd)];
+  if (yr2 && yr2.note) out.unshift(['📝', 'Note from yesterday: ' + yr2.note]);
   return out.slice(0, 3);
 }
 let celebrate = false;
@@ -302,21 +315,144 @@ function confetti() {
   document.body.appendChild(box); setTimeout(() => box.remove(), 2400); buzz([30, 40, 30]);
 }
 
+/* ---------- quick add (natural language, English + Turkish) ---------- */
+const ascii = s => String(s).toLocaleLowerCase('tr').replace(/ı/g, 'i').replace(/ç/g, 'c').replace(/ş/g, 's').replace(/ğ/g, 'g').replace(/ö/g, 'o').replace(/ü/g, 'u');
+const WD = { pazartesi: 1, monday: 1, sali: 2, tuesday: 2, carsamba: 3, wednesday: 3, persembe: 4, thursday: 4, cuma: 5, friday: 5, cumartesi: 6, saturday: 6, pazar: 0, sunday: 0 };
+const WD_RE = 'pazartesi|monday|sal[ıiİI]|tuesday|[çc]ar[şs]amba|wednesday|per[şs]embe|thursday|cumartesi|saturday|cuma|friday|pazar|sunday';
+const MON = { ocak: 0, jan: 0, january: 0, subat: 1, feb: 1, february: 1, mart: 2, mar: 2, march: 2, nisan: 3, apr: 3, april: 3, mayis: 4, may: 4, haziran: 5, jun: 5, june: 5, temmuz: 6, jul: 6, july: 6, agustos: 7, aug: 7, august: 7, eylul: 8, sep: 8, sept: 8, september: 8, ekim: 9, oct: 9, october: 9, kasim: 10, nov: 10, november: 10, aralik: 11, dec: 11, december: 11 };
+const MON_RE = 'ocak|january|jan|[şs]ubat|february|feb|mart|march|mar|nisan|april|apr|may[ıi]s|may|haziran|june|jun|temmuz|july|jul|a[ğg]ustos|august|aug|eyl[üu]l|september|sept|sep|ekim|october|oct|kas[ıi]m|november|nov|aral[ıi]k|december|dec';
+function parseQuick(raw) {
+  let w = ' ' + String(raw).replace(/\s+/g, ' ').trim() + ' ';
+  const out = { title: '', type: 'todo', date: '', time: '', repeat: 'none', area: '' };
+  const take = (src, fn) => { const m = new RegExp('\\s(?:' + src + ')(?=[\\s,;]|$)', 'i').exec(w); if (!m || fn(m) === false) return false; w = w.slice(0, m.index) + ' ' + w.slice(m.index + m[0].length); return true; };
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const addDays = n => { const d = new Date(today); d.setDate(d.getDate() + n); return dkey(d); };
+  const nextWd = n => { let k = (n - today.getDay() + 7) % 7; if (k === 0) k = 7; return addDays(k); };
+  const setT = (h, mi, ap) => { h = +h; mi = +(mi || 0); if (ap) { ap = ap.toLowerCase(); if (h < 1 || h > 12) return false; if (ap === 'pm' && h < 12) h += 12; if (ap === 'am' && h === 12) h = 0; } if (h > 23 || mi > 59) return false; out.time = pad(h) + ':' + pad(mi); return true; };
+  const yr = s => !s ? 0 : s.length === 2 ? 2000 + +s : +s;
+  const setD = (y, mo, d) => {
+    if (!(d >= 1 && d <= 31) || mo === undefined) return false;
+    let dt = new Date(y || today.getFullYear(), mo, d); if (dt.getMonth() !== mo) return false;
+    if (!y && dt < today) dt = new Date(today.getFullYear() + 1, mo, d);
+    out.date = dkey(dt); return true;
+  };
+  take('#(work|i[şs]|personal|ki[şs]isel|home|ev)', m => { const a = ascii(m[1]); out.area = a === 'work' || a === 'is' ? 'work' : a === 'personal' || a === 'kisisel' ? 'personal' : 'home'; });
+  if (!take('(?:every|her)\\s+(' + WD_RE + ')', m => { out.repeat = 'weekly'; out.date = nextWd(WD[ascii(m[1])]); })) {
+    take('every\\s+day|daily|her\\s+g[üu]n|g[üu]nl[üu]k', () => { out.repeat = 'daily'; }) ||
+    take('weekdays|hafta\\s+i[çc]i', () => { out.repeat = 'weekdays'; }) ||
+    take('every\\s+week|weekly|her\\s+hafta|haftal[ıi]k', () => { out.repeat = 'weekly'; }) ||
+    take('every\\s+month|monthly|her\\s+ay|ayl[ıi]k', () => { out.repeat = 'monthly'; });
+  }
+  take('(?:saat|at|@)\\s*(\\d{1,2})(?:[:.](\\d{2}))?\\s*(am|pm)?', m => setT(m[1], m[2], m[3])) ||
+  take('(\\d{1,2}):(\\d{2})\\s*(am|pm)?', m => setT(m[1], m[2], m[3])) ||
+  take('(\\d{1,2})\\s*(am|pm)', m => setT(m[1], 0, m[2]));
+  if (!out.date) {
+    take('day\\s+after\\s+tomorrow|[öo]b[üu]r\\s+g[üu]n', () => { out.date = addDays(2); }) ||
+    take('tomorrow|tmrw|yar[ıiİI]n', () => { out.date = addDays(1); }) ||
+    take('today|bug[üu]n|tonight|bu\\s+ak[şs]am', () => { out.date = addDays(0); }) ||
+    take('in\\s+(\\d{1,3})\\s+(day|days|week|weeks)', m => { out.date = addDays(+m[1] * (/^w/i.test(m[2]) ? 7 : 1)); }) ||
+    take('(\\d{1,3})\\s+(g[üu]n|hafta)\\s+sonra', m => { out.date = addDays(+m[1] * (ascii(m[2]) === 'hafta' ? 7 : 1)); }) ||
+    take('next\\s+week|gelecek\\s+hafta|haftaya', () => { out.date = addDays(7); }) ||
+    take('(?:(?:next|this|gelecek|bu|[öo]n[üu]m[üu]zdeki)\\s+)?(' + WD_RE + ')', m => { out.date = nextWd(WD[ascii(m[1])]); }) ||
+    take('(\\d{4})-(\\d{2})-(\\d{2})', m => setD(+m[1], +m[2] - 1, +m[3])) ||
+    take('(\\d{1,2})\\s+(' + MON_RE + ')(?:\\s+(\\d{4}))?', m => setD(yr(m[3]), MON[ascii(m[2])], +m[1])) ||
+    take('(' + MON_RE + ')\\s+(\\d{1,2})(?:\\s+(\\d{4}))?', m => setD(yr(m[3]), MON[ascii(m[1])], +m[2])) ||
+    take('(\\d{1,2})/(\\d{1,2})(?:/(\\d{2,4}))?', m => setD(yr(m[3]), +m[2] - 1, +m[1])) ||
+    take('(\\d{1,2})\\.(0[1-9]|1[0-2])(?:\\.(\\d{2,4}))?', m => setD(yr(m[3]), +m[2] - 1, +m[1]));
+  }
+  let title = w.replace(/\s+/g, ' ').trim().replace(/^[\s,;:\-–]+|[\s,;:\-–]+$/g, '');
+  title = title.replace(/^(?:on|at|by|saat|tarihinde)\s+/i, '').replace(/\s+(?:on|at|by|saat)$/i, '').trim();
+  out.title = title.slice(0, 120);
+  const a = ascii(title);
+  out.type = /toplanti|meeting|gorusme|standup|(^| )sync( |$)/.test(a) ? 'meeting' : /randevu|appointment|doktor|doctor|dentist|dis hekim/.test(a) ? 'appointment' : /seyahat|trip|travel|ucus|flight|tatil/.test(a) ? 'trip' : /(^| )(call|arama|telefon)( |$)|aramak/.test(a) ? 'call' : /remind|hatirlat/.test(a) ? 'reminder' : 'todo';
+  if (!out.date) {
+    out.date = addDays(0);
+    if (out.time && out.repeat === 'none') { const n = new Date(); if (+out.time.slice(0, 2) * 60 + +out.time.slice(3) < n.getHours() * 60 + n.getMinutes()) out.date = addDays(1); }
+  }
+  return out;
+}
+const quickPreview = p => p.title ? typeOf(p.type)[1] + ' ' + p.title + ' · ' + (p.repeat !== 'none' ? repeatLabel(p.repeat) + ' from ' : '') + dayLabel(p.date) + (p.time ? ' · ' + p.time : '') + (p.area ? ' · ' + areaOf(p.area)[1] + ' ' + areaOf(p.area)[2] : '') : 'Type what to do…';
+function addQuick(text) {
+  const p = parseQuick(text); if (!p.title) return null;
+  const t = { id: uid(), title: p.title, type: p.type, date: p.date, time: p.time, repeat: p.repeat, area: p.area || S.settings.area || '', notes: '', subs: [], doneDays: {}, created: Date.now(), est: 0 };
+  S.tasks.push(t); save(); return t;
+}
+const QA_HINT = 'Try: “friday 10:00 call bank”, “yarın saat 9 toplantı #work”, “her gün 08:00 ilaç”';
+function quickAddHTML() {
+  return '<section class="card qa" style="gap:6px"><div class="row"><input type="text" id="qa" placeholder="Quick add: tomorrow 14:30 meeting" aria-label="Quick add task" autocomplete="off" enterkeyhint="done"><button class="btn pri" id="qaBtn">Add</button></div><div class="sub" id="qaPrev">' + esc(QA_HINT) + '</div></section>';
+}
+
+/* ---------- calendar export (.ics) ---------- */
+function taskICS(t) {
+  const ex = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  const d = t.date.replace(/-/g, ''), stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//FocusDay//EN', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT', 'UID:' + t.id + '@focusday', 'DTSTAMP:' + stamp];
+  if (t.time) { const s = +t.time.slice(0, 2) * 60 + +t.time.slice(3), e = Math.min(s + 45, 1439); L.push('DTSTART:' + d + 'T' + t.time.replace(':', '') + '00', 'DTEND:' + d + 'T' + pad(Math.floor(e / 60)) + pad(e % 60) + '00'); }
+  else { const n = pd(t.date); n.setDate(n.getDate() + 1); L.push('DTSTART;VALUE=DATE:' + d, 'DTEND;VALUE=DATE:' + dkey(n).replace(/-/g, '')); }
+  const rr = { daily: 'FREQ=DAILY', weekdays: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', weekly: 'FREQ=WEEKLY', monthly: 'FREQ=MONTHLY' }[t.repeat]; if (rr) L.push('RRULE:' + rr);
+  L.push('SUMMARY:' + ex(t.title));
+  const desc = [t.notes].concat((t.subs || []).map(s => (s.done ? '[x] ' : '[ ] ') + s.text)).filter(Boolean).join('\n'); if (desc) L.push('DESCRIPTION:' + ex(desc));
+  if (t.time) L.push('BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + ex(t.title), 'TRIGGER:-PT15M', 'END:VALARM');
+  L.push('END:VEVENT', 'END:VCALENDAR'); return L.join('\r\n') + '\r\n';
+}
+function downloadICS(t) {
+  const blob = new Blob([taskICS(t)], { type: 'text/calendar' }), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = (t.title.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'task') + '.ics';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast('Calendar file ready — open it to add the event', null);
+}
+
 /* ---------- Today: summary ---------- */
+let openTask = null;
+const inArea = t => !S.settings.area || t.area === S.settings.area;
+function areaChips() {
+  const opts = [['', 'All']].concat(AREAS.map(a => [a[0], a[1] + ' ' + a[2]]));
+  return '<div class="chips" role="group" aria-label="Filter by area" style="padding-bottom:8px">' + opts.map(o => '<button class="chip' + (S.settings.area === o[0] ? ' sel' : '') + '" data-area="' + o[0] + '" aria-pressed="' + (S.settings.area === o[0]) + '">' + o[1] + '</button>').join('') + '</div>';
+}
+function taskDetailHTML(t) {
+  let h = '<div class="tdet">';
+  if (t.notes) h += '<div class="tnote">' + esc(t.notes) + '</div>';
+  (t.subs || []).forEach(s => { h += '<div class="srow"><button class="chk sm' + (s.done ? ' on' : '') + '" data-st="' + t.id + '|' + s.id + '" role="checkbox" aria-checked="' + !!s.done + '" aria-label="' + esc(s.text) + '">' + (s.done ? '✓' : '') + '</button><span class="stxt' + (s.done ? ' done' : '') + '">' + esc(s.text) + '</span><button class="icon sm" data-sx="' + t.id + '|' + s.id + '" aria-label="Delete item: ' + esc(s.text) + '">✕</button></div>'; });
+  h += '<form class="row" data-sf="' + t.id + '"><input type="text" maxlength="120" placeholder="Add checklist item" aria-label="New checklist item for ' + esc(t.title) + '"><button class="btn" type="submit">Add</button></form>';
+  return h + '<div class="row"><button class="btn sp" data-ics="' + t.id + '">📅 Add to Calendar</button><button class="btn sp" data-tedit="' + t.id + '">Edit</button></div></div>';
+}
+function timelineHTML(list, today) {
+  const timed = list.filter(t => t.time), any = list.filter(t => !t.time), DUR = 45, PX = 56;
+  let h = any.length ? '<div class="tl-any">' + any.map(t => '<button class="chip' + (isDone(t, today) ? ' done' : '') + '" data-tc="' + t.id + '" role="checkbox" aria-checked="' + isDone(t, today) + '">' + typeOf(t.type)[1] + ' ' + esc(t.title) + '</button>').join('') + '</div>' : '';
+  if (!timed.length) return h + '<div class="empty">No timed tasks today.</div>';
+  const mins = t => +t.time.slice(0, 2) * 60 + +t.time.slice(3), ms = timed.map(mins);
+  const start = Math.min(8 * 60, Math.floor(Math.min(...ms) / 60) * 60), end = Math.min(24 * 60, Math.max(18 * 60, Math.ceil((Math.max(...ms) + DUR) / 60) * 60));
+  const items = timed.map(t => ({ t, s: mins(t), e: mins(t) + DUR })).sort((a, b) => a.s - b.s);
+  let cl = [], clEnd = -1; const flush = () => { const n = Math.max(...cl.map(c => c.col)) + 1; cl.forEach(c => { c.n = n; }); cl = []; clEnd = -1; };
+  items.forEach(it => { if (cl.length && it.s >= clEnd) flush(); const used = cl.filter(c => c.e > it.s).map(c => c.col); let col = 0; while (used.includes(col)) col++; it.col = col; cl.push(it); clEnd = Math.max(clEnd, it.e); });
+  if (cl.length) flush();
+  h += '<div class="tl" style="height:' + (end - start) / 60 * PX + 'px">';
+  for (let m = start; m <= end; m += 60) h += '<div class="tl-h" style="top:' + (m - start) / 60 * PX + 'px"><span>' + pad(m / 60 % 24) + ':00</span></div>';
+  h += '<div class="tl-grid">' + items.map(it => {
+    const d = isDone(it.t, today);
+    return '<button class="blk' + (d ? ' done' : '') + '" data-tc="' + it.t.id + '" role="checkbox" aria-checked="' + d + '" style="--tc:' + (TCOL[it.t.type] || TCOL.todo) + ';top:' + (it.s - start) / 60 * PX + 'px;height:' + (DUR / 60 * PX - 3) + 'px;left:calc(' + it.col * 100 / it.n + '% + 1px);width:calc(' + 100 / it.n + '% - 3px)"><b>' + typeOf(it.t.type)[1] + ' ' + esc(it.t.title) + '</b><span>' + it.t.time + '</span></button>';
+  }).join('') + '</div>';
+  const n = new Date(), nm = n.getHours() * 60 + n.getMinutes();
+  if (nm >= start && nm <= end) h += '<div class="tl-now" aria-hidden="true" style="top:' + (nm - start) / 60 * PX + 'px"></div>';
+  return h + '</div>';
+}
 function viewToday() {
-  const today = dkey(), list = tasksFor(today), over = overdue();
+  const today = dkey(), all = tasksFor(today), list = all.filter(inArea), over = overdue().filter(inArea);
   const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
   const dayStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
   const pr = dayProgress(), best = Math.max(0, ...S.habits.map(habitStreak));
   let h = '<section class="hero' + (pr.total && pr.done === pr.total ? ' win' : '') + '"><div class="hr" role="img" aria-label="' + pr.pct + ' percent of today done"><div class="hring" style="--p:' + pr.pct + '"></div><b>' + pr.pct + '%</b></div>' +
-    '<div class="hx"><h1>' + greet + '</h1><div class="hsub">' + esc(dayStr) + '</div><div class="hline">' + (!pr.total ? 'A clean slate. Add something to plan.' : pr.done === pr.total ? 'All done — nice work 🎉' : pr.done + ' of ' + pr.total + ' done') + (best >= 2 ? ' · 🔥 ' + best + '-day streak' : '') + '</div></div></section>';
+    '<div class="hx"><h1>' + greet + '</h1><div class="hsub">' + esc(dayStr) + '</div><div class="hline">' + (!pr.total ? 'A clean slate. Add something to plan.' : pr.done === pr.total ? 'All done — nice work 🎉' : pr.done + ' of ' + pr.total + ' done') + (best >= 2 ? ' · 🔥 ' + best + '-day streak' : '') + '</div></div>' +
+    '<button class="hsearch" id="hSearch" aria-label="Search everything">🔍</button></section>';
   h += '<div class="grid3" id="info" aria-label="Weather, time and exchange rate">' + infoHTML() + '</div>';
+  h += quickAddHTML();
   const nd = nudges();
   if (nd.length) h += '<section class="card nudge" aria-label="Smart nudges"><h2>✨ Smart nudges</h2>' + nd.map(n => '<div class="nrow"><span class="nic" aria-hidden="true">' + n[0] + '</span><span>' + esc(n[1]) + '</span></div>').join('') + '</section>';
+  if (hr >= 18 && !(S.reviews[today] && S.reviews[today].done)) h += '<div class="banner row"><span class="sp">🌙 Wrap up your day — plan tomorrow.</span><button class="btn pri" data-go="review">Review</button></div>';
   if (new Date().getDay() === 0) h += '<div class="banner row"><span class="sp">It\'s Sunday — your weekly report is ready.</span><button class="btn pri" data-go="report">Open</button></div>';
 
   if (over.length) {
-    h += '<section class="card"><h2 style="padding-bottom:6px;color:var(--danger)">Overdue</h2>';
+    h += '<section class="card"><div class="row" style="padding-bottom:6px"><h2 class="sp" style="color:var(--danger)">Overdue</h2>' + (over.length > 1 ? '<button class="btn" id="mvAll">All → Today</button>' : '') + '</div>';
     over.forEach(t => {
       h += '<div class="item"><button class="chk" role="checkbox" aria-checked="false" aria-label="' + esc(t.title) + '" data-od="' + t.id + '"></button>' + tchip(t) + '<span class="title">' + esc(t.title) + '</span><span class="sub">' + dayLabel(t.date) + '</span>' +
         '<button class="btn" data-mv="' + t.id + '" aria-label="Move to today: ' + esc(t.title) + '">→ Today</button></div>';
@@ -324,39 +460,69 @@ function viewToday() {
     h += '</section>';
   }
 
+  const tv = S.settings.dayView === 'timeline';
   h += '<section class="card"><div class="row" style="padding-bottom:6px"><h2 class="sp">Today\'s plan</h2><button class="btn" id="toggleEdit">' + (editing ? 'Done' : 'Edit') + '</button><button class="btn pri" data-newtask="1">+ Add</button></div>';
+  h += '<div class="seg" role="group" aria-label="Day view" style="margin-bottom:8px"><button data-dv="list" class="' + (tv ? '' : 'on') + '" aria-pressed="' + !tv + '">List</button><button data-dv="timeline" class="' + (tv ? 'on' : '') + '" aria-pressed="' + tv + '">Timeline</button></div>';
+  if (S.tasks.some(t => t.area) || S.settings.area) h += areaChips();
   if (!list.length) h += '<div class="empty">Nothing planned for today ✨<br>Enjoy the space or add something.</div>';
-  list.slice().sort((a, b) => isDone(a, today) - isDone(b, today)).forEach(t => {
-    const d = isDone(t, today);
+  else if (tv) h += timelineHTML(list, today);
+  else list.slice().sort((a, b) => isDone(a, today) - isDone(b, today)).forEach(t => {
+    const d = isDone(t, today), ar = areaOf(t.area), ns = (t.subs || []).length, nd2 = (t.subs || []).filter(s => s.done).length, open = openTask === t.id;
     h += '<div class="item ' + (d ? 'done' : '') + '"><button class="chk ' + (d ? 'on' : '') + (pulse === t.id ? ' pop' : '') + '" role="checkbox" aria-checked="' + d + '" aria-label="' + esc(t.title) + '" data-tc="' + t.id + '">' + (d ? '✓' : '') + '</button>' +
-      tchip(t) + '<div class="sp"><div class="title" style="white-space:normal">' + esc(t.title) + '</div><div class="sub">' + (t.time || 'All day') + (t.repeat !== 'none' ? ' · ' + repeatLabel(t.repeat) : '') + '</div></div>' +
-      (editing ? '<button class="icon" data-td="' + t.id + '" aria-label="Delete: ' + esc(t.title) + '">🗑</button>' : '') + '</div>';
+      tchip(t) + '<button class="link sp" data-tx="' + t.id + '" aria-expanded="' + open + '"><div class="title" style="white-space:normal">' + esc(t.title) + '</div><div class="sub">' + (t.time || 'All day') + (t.repeat !== 'none' ? ' · ' + repeatLabel(t.repeat) : '') + (ns ? ' · ☑ ' + nd2 + '/' + ns : '') + (t.notes ? ' · 📝' : '') + (ar ? ' · ' + ar[1] + ' ' + ar[2] : '') + '</div></button>' +
+      (editing ? '<button class="icon" data-td="' + t.id + '" aria-label="Delete: ' + esc(t.title) + '">🗑</button>' : '') + '</div>' + (open ? taskDetailHTML(t) : '');
   });
   h += '</section>';
 
   h += '<section class="card"><div class="row" style="padding-bottom:6px"><h2 class="sp">Habits</h2><button class="btn pri" data-newhabit="1">+ Add</button></div>';
   if (!S.habits.length) h += '<div class="empty">No habits yet.</div>';
   S.habits.forEach(x => {
-    const a = habitAmt(x, today), pa = periodAmt(x, today), per = perOf(x), met = pa >= x.goal, st = habitStreak(x), p = Math.min(100, Math.round(100 * pa / x.goal));
-    h += '<div class="habit"><div class="row"><span class="mring' + (met ? ' on' : '') + (pulse === x.id ? ' pop' : '') + '" style="--p:' + p + '" aria-hidden="true"><i>' + (met ? '✓' : '') + '</i></span><div class="sp"><div class="title" style="white-space:normal">' + esc(x.title) + '</div>' +
-      '<div class="sub">' + (st >= 2 ? '<span class="flame">🔥 ' + st + '</span> ' : '') + fmtNum(pa) + ' / ' + fmtNum(x.goal) + ' ' + esc(x.unit) + (per === 'day' ? '' : ' this ' + per) + (per !== 'day' && a > 0 ? ' · today ' + fmtNum(a) : '') + (met ? ' · done' : '') + (st >= 2 ? '' : st ? ' · ' + streakText(st, x) : '') + '</div></div>' +
-      (a > 0 ? '<button class="btn" data-hr="' + x.id + '" aria-label="Reset today: ' + esc(x.title) + '">Reset</button>' : '') +
+    const a = habitAmt(x, today), pa = periodAmt(x, today), per = perOf(x), met = pa >= x.goal, sk = per === 'day' && !met && habitSkipped(x, today), st = habitStreak(x), p = Math.min(100, Math.round(100 * pa / x.goal));
+    h += '<div class="habit"><div class="row"><span class="mring' + (met ? ' on' : '') + (sk ? ' sk' : '') + (pulse === x.id ? ' pop' : '') + '" style="--p:' + p + '" aria-hidden="true"><i>' + (met ? '✓' : sk ? '–' : '') + '</i></span><div class="sp"><div class="title" style="white-space:normal">' + esc(x.title) + '</div>' +
+      '<div class="sub">' + (st >= 2 ? '<span class="flame">🔥 ' + st + '</span> ' : '') + fmtNum(pa) + ' / ' + fmtNum(x.goal) + ' ' + esc(x.unit) + (per === 'day' ? '' : ' this ' + per) + (per !== 'day' && a > 0 ? ' · today ' + fmtNum(a) : '') + (met ? ' · done' : sk ? ' · skipped today' : '') + (st >= 2 ? '' : st ? ' · ' + streakText(st, x) : '') + '</div></div>' +
+      (a > 0 ? '<button class="btn" data-hr="' + x.id + '" aria-label="Reset today: ' + esc(x.title) + '">Reset</button>' : per === 'day' && !met ? '<button class="btn" data-hskip="' + x.id + '" aria-label="' + (sk ? 'Undo skip: ' : 'Skip today: ') + esc(x.title) + '">' + (sk ? 'Undo skip' : 'Skip') + '</button>' : '') +
       (editing ? '<button class="icon" data-hd="' + x.id + '" aria-label="Delete habit: ' + esc(x.title) + '">🗑</button>' : '') + '</div>' +
       '<form class="row" data-hf="' + x.id + '"><input type="text" inputmode="decimal" placeholder="How many ' + esc(x.unit) + '?" aria-label="Amount of ' + esc(x.unit) + ' for ' + esc(x.title) + '"><button class="btn pri" type="submit">Add</button>' + (met ? '' : '<button class="btn" type="button" data-hdone="' + x.id + '" aria-label="Mark done: ' + esc(x.title) + '">Done</button>') + '</form></div>';
   });
   return h + '</section>';
 }
+function bindTaskDetail() {
+  const find = id => S.tasks.find(x => x.id === id);
+  document.querySelectorAll('[data-tx]').forEach(b => b.onclick = () => { openTask = openTask === b.dataset.tx ? null : b.dataset.tx; render(); });
+  document.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { const [tid, sid] = b.dataset.st.split('|'), t = find(tid), s = t && t.subs.find(x => x.id === sid); if (s) { s.done = !s.done; save(); render(); } });
+  document.querySelectorAll('[data-sx]').forEach(b => b.onclick = () => { const [tid, sid] = b.dataset.sx.split('|'), t = find(tid); if (t) { t.subs = t.subs.filter(x => x.id !== sid); save(); render(); } });
+  document.querySelectorAll('[data-sf]').forEach(f => f.onsubmit = e => {
+    e.preventDefault(); const t = find(f.dataset.sf), v = f.querySelector('input').value.trim(); if (!t || !v) return;
+    t.subs = t.subs || []; t.subs.push({ id: uid(), text: v.slice(0, 120), done: false }); save(); render();
+    const nf2 = document.querySelector('[data-sf="' + t.id + '"] input'); if (nf2) nf2.focus();
+  });
+  document.querySelectorAll('[data-ics]').forEach(b => b.onclick = () => { const t = find(b.dataset.ics); if (t) downloadICS(t); });
+  document.querySelectorAll('[data-tedit]').forEach(b => b.onclick = () => { const t = find(b.dataset.tedit); if (t) { form = formFrom(t); go('plan'); } });
+}
+function openSearch() { go('more'); moreSub = 'search'; render(); window.scrollTo(0, 0); }
 function bindToday() {
   document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
   document.querySelectorAll('[data-newhabit]').forEach(b => b.onclick = () => { hform = { id: null, title: '', goal: '1', unit: 'times', per: 'day' }; go('plan'); });
   document.querySelectorAll('[data-newtask]').forEach(b => b.onclick = () => { form = blankForm(); go('plan'); });
+  $('#hSearch').onclick = openSearch;
+  const qa = $('#qa'), prev = $('#qaPrev');
+  qa.oninput = () => { prev.textContent = qa.value.trim() ? quickPreview(parseQuick(qa.value)) : QA_HINT; };
+  qa.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('#qaBtn').click(); } };
+  $('#qaBtn').onclick = () => {
+    const t = addQuick(qa.value); if (!t) { toast('Type what you want to do first', null); qa.focus(); return; }
+    render(); toast('Added: ' + t.title + ' · ' + dayLabel(t.date) + (t.time ? ' ' + t.time : ''), () => { S.tasks = S.tasks.filter(x => x.id !== t.id); save(); render(); });
+  };
+  document.querySelectorAll('[data-dv]').forEach(b => b.onclick = () => { S.settings.dayView = b.dataset.dv; save(); render(); });
+  document.querySelectorAll('[data-area]').forEach(b => b.onclick = () => { S.settings.area = b.dataset.area; save(); render(); });
   $('#toggleEdit').onclick = () => { editing = !editing; render(); };
   document.querySelectorAll('[data-tc]').forEach(b => b.onclick = () => toggleDone(b.dataset.tc, dkey()));
   document.querySelectorAll('[data-od]').forEach(b => b.onclick = () => { const t = S.tasks.find(x => x.id === b.dataset.od); if (t) toggleDone(t.id, t.date); });
   document.querySelectorAll('[data-mv]').forEach(b => b.onclick = () => { const t = S.tasks.find(x => x.id === b.dataset.mv); if (t) { t.date = dkey(); save(); render(); } });
+  if ($('#mvAll')) $('#mvAll').onclick = () => { const was = overdue().filter(inArea).map(t => [t, t.date]); was.forEach(([t]) => { t.date = dkey(); }); save(); render(); toast(was.length + ' tasks moved to today', () => { was.forEach(([t, d]) => { t.date = d; }); save(); render(); }); };
   document.querySelectorAll('[data-td]').forEach(b => b.onclick = () => removeTask(b.dataset.td));
   document.querySelectorAll('[data-hd]').forEach(b => b.onclick = () => removeHabit(b.dataset.hd));
   document.querySelectorAll('[data-hr]').forEach(b => b.onclick = () => setHabit(b.dataset.hr, () => 0));
+  document.querySelectorAll('[data-hskip]').forEach(b => b.onclick = () => skipHabit(b.dataset.hskip));
   document.querySelectorAll('[data-hdone]').forEach(b => b.onclick = () => { const x = S.habits.find(q => q.id === b.dataset.hdone); if (x) setHabit(x.id, a => a + Math.max(0, x.goal - periodAmt(x, dkey()))); });
   document.querySelectorAll('[data-hf]').forEach(f => f.onsubmit = e => {
     e.preventDefault();
@@ -364,6 +530,44 @@ function bindToday() {
     if (!(v > 0) || v > 100000) { toast('Enter an amount greater than 0', null); return; }
     setHabit(f.dataset.hf, a => a + v);
   });
+  bindTaskDetail();
+}
+
+/* ---------- evening review ---------- */
+function skipHabit(id) { const x = S.habits.find(q => q.id === id); if (!x) return; x.skips = x.skips || {}; const k = dkey(); if (x.skips[k]) delete x.skips[k]; else x.skips[k] = 1; save(); render(); }
+function viewReview() {
+  const today = dkey(), tm = new Date(); tm.setDate(tm.getDate() + 1); const tom = dkey(tm);
+  const ts = tasksFor(today), open = ts.filter(t => !isDone(t, today)), pr = dayProgress();
+  const mins = S.sessions.filter(s => dkey(new Date(s.start)) === today).reduce((q, s) => q + s.dur, 0);
+  const hopen = S.habits.filter(x => !habitMet(x, today) && !(perOf(x) === 'day' && habitSkipped(x, today)));
+  const tl = tasksFor(tom), rv = S.reviews[today] || {};
+  let h = '<button class="btn" data-go="today" style="align-self:flex-start">‹ Today</button><h1>Wrap up</h1><div class="sub">Close the day, plan tomorrow.</div>';
+  h += '<section class="card"><div class="grid3"><div class="stat"><b>' + ts.filter(t => isDone(t, today)).length + '/' + ts.length + '</b><span class="sub">Tasks</span></div><div class="stat"><b>' + S.habits.filter(x => habitMet(x, today)).length + '/' + S.habits.length + '</b><span class="sub">Habits</span></div><div class="stat"><b>' + fmtMin(mins) + '</b><span class="sub">Focus</span></div></div></section>';
+  h += '<section class="card"><h2 style="padding-bottom:6px">Unfinished today</h2>';
+  if (!open.length) h += '<div class="empty">Everything is done 🎉</div>';
+  open.forEach(t => {
+    h += '<div class="item" style="flex-wrap:wrap;padding:8px 0">' + tchip(t) + '<span class="title" style="white-space:normal">' + esc(t.title) + '</span><div class="row" style="width:100%;padding-left:44px"><button class="btn" data-rdone="' + t.id + '" aria-label="Mark done: ' + esc(t.title) + '">Done</button>' +
+      (t.repeat === 'none' ? '<button class="btn" data-rmv="' + t.id + '" aria-label="Move to tomorrow: ' + esc(t.title) + '">→ Tomorrow</button>' : '<span class="sub">Repeats</span>') + '<button class="icon" data-rdel="' + t.id + '" aria-label="Delete: ' + esc(t.title) + '">🗑</button></div></div>';
+  });
+  h += '</section>';
+  if (hopen.length) {
+    h += '<section class="card"><h2 style="padding-bottom:6px">Habits still open</h2>';
+    hopen.forEach(x => { h += '<div class="item"><span class="title">' + esc(x.title) + '</span><span class="sub">' + fmtNum(r2(x.goal - periodAmt(x, today))) + ' ' + esc(x.unit) + ' left' + (perOf(x) === 'day' ? '' : ' this ' + perOf(x)) + '</span>' + (perOf(x) === 'day' ? '<button class="btn" data-rskip="' + x.id + '" aria-label="Skip today: ' + esc(x.title) + '">Skip</button>' : '') + '</div>'; });
+    h += '</section>';
+  }
+  h += '<section class="card"><h2 style="padding-bottom:6px">Tomorrow</h2>' + (tl.length ? tl.map(t => '<div class="item">' + tchip(t) + '<span class="title">' + esc(t.title) + '</span><span class="sub">' + (t.time || 'All day') + '</span></div>').join('') : '<div class="empty">Nothing planned yet.</div>') + '</section>';
+  h += '<section class="card" style="gap:8px"><h2>Note for tomorrow-you</h2><textarea id="rvNote" rows="3" maxlength="300" placeholder="Optional. It shows up in Smart nudges tomorrow." aria-label="Note for tomorrow">' + esc(rv.note || '') + '</textarea></section>';
+  return h + '<button class="btn pri big" id="rvFinish">Finish review</button>';
+}
+function bindReview() {
+  const today = dkey(), tom = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return dkey(d); })();
+  document.querySelectorAll('[data-rdone]').forEach(b => b.onclick = () => toggleDone(b.dataset.rdone, today));
+  document.querySelectorAll('[data-rmv]').forEach(b => b.onclick = () => { const t = S.tasks.find(x => x.id === b.dataset.rmv); if (!t) return; const was = t.date; t.date = tom; save(); render(); toast('"' + t.title + '" moved to tomorrow', () => { t.date = was; save(); render(); }); });
+  document.querySelectorAll('[data-rdel]').forEach(b => b.onclick = () => removeTask(b.dataset.rdel));
+  document.querySelectorAll('[data-rskip]').forEach(b => b.onclick = () => skipHabit(b.dataset.rskip));
+  const note = () => { S.reviews[today] = Object.assign(S.reviews[today] || {}, { note: $('#rvNote').value.trim() }); save(); };
+  $('#rvNote').oninput = note;
+  $('#rvFinish').onclick = () => { note(); S.reviews[today].done = true; save(); go('today'); toast('Day closed. Rest well 🌙', null); };
 }
 
 /* ---------- Plan: tasks + habits ---------- */
@@ -382,8 +586,11 @@ function formHTML() {
     '<div class="g2"><div><label class="sub" for="f-type">Type</label><select id="f-type">' + TYPES.map(t => '<option value="' + t[0] + '"' + (f.type === t[0] ? ' selected' : '') + '>' + t[1] + ' ' + t[2] + '</option>').join('') + '</select></div>' +
     '<div><label class="sub" for="f-repeat">Repeat</label><select id="f-repeat">' + REPEATS.map(r => '<option value="' + r[0] + '"' + (f.repeat === r[0] ? ' selected' : '') + '>' + r[1] + '</option>').join('') + '</select></div>' +
     '<div><label class="sub" for="f-date">Date</label><select id="f-date">' + dateOptions(f) + '</select></div>' +
-    '<div><label class="sub" for="f-time">Time</label><select id="f-time">' + timeOptions(f) + '</select></div></div>' +
+    '<div><label class="sub" for="f-time">Time</label><select id="f-time">' + timeOptions(f) + '</select></div>' +
+    '<div><label class="sub" for="f-area">Area</label><select id="f-area"><option value="">None</option>' + AREAS.map(x => '<option value="' + x[0] + '"' + (f.area === x[0] ? ' selected' : '') + '>' + x[1] + ' ' + x[2] + '</option>').join('') + '</select></div></div>' +
     (f.other ? '<input type="date" id="f-date2" value="' + f.date + '" aria-label="Pick a date">' : '') +
+    '<details class="more" id="f-more"' + (f.more || f.notes || f.checklist ? ' open' : '') + '><summary>Notes &amp; checklist</summary><label class="sub" for="f-notes">Notes</label><textarea id="f-notes" rows="3" maxlength="1000" placeholder="Details, numbers, who to ask…">' + esc(f.notes) + '</textarea><label class="sub" for="f-check">Checklist (one item per line)</label><textarea id="f-check" rows="4" maxlength="1500" placeholder="Item one\nItem two">' + esc(f.checklist) + '</textarea></details>' +
+    (f.id ? '<button class="btn" id="f-ics">📅 Add to Calendar</button>' : '') +
     '<div class="row"><button class="btn pri sp" id="f-save">Save</button><button class="btn" id="f-cancel">Cancel</button>' + (f.id ? '<button class="icon" id="f-del" aria-label="Delete this task">🗑</button>' : '') + '</div></section>';
 }
 function bindForm() {
@@ -391,6 +598,11 @@ function bindForm() {
   q('f-title').oninput = e => { f.title = e.target.value; };
   q('f-type').onchange = e => { f.type = e.target.value; if (f.type !== 'todo' && f.type !== 'trip' && !f.hasTime) f.hasTime = true; render(); };
   q('f-repeat').onchange = e => { f.repeat = e.target.value; };
+  q('f-area').onchange = e => { f.area = e.target.value; };
+  q('f-notes').oninput = e => { f.notes = e.target.value; };
+  q('f-check').oninput = e => { f.checklist = e.target.value; };
+  q('f-more').ontoggle = e => { f.more = e.target.open; };
+  if (q('f-ics')) q('f-ics').onclick = () => { const t = S.tasks.find(x => x.id === f.id); if (t) downloadICS(t); };
   q('f-date').onchange = e => { if (e.target.value === 'other') { f.other = true; } else { f.other = false; f.date = e.target.value; } render(); };
   if (q('f-date2')) q('f-date2').onchange = e => { f.date = e.target.value || dkey(); };
   q('f-time').onchange = e => { f.hasTime = e.target.value !== ''; if (f.hasTime) f.time = e.target.value; };
@@ -425,10 +637,10 @@ function viewPlan() {
   const today = dkey();
   const row = t => '<div class="item">' + tchip(t) + '<button class="link sp" data-te="' + t.id + '"><div class="title" style="white-space:normal">' + esc(t.title) + '</div><div class="sub">' + esc(taskMeta(t)) + '</div></button>' +
     '<button class="icon" data-td="' + t.id + '" aria-label="Delete: ' + esc(t.title) + '">🗑</button></div>';
-  const over = overdue(), oneoff = S.tasks.filter(t => t.repeat === 'none' && t.date >= today && !isDone(t, t.date)).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))), rep = S.tasks.filter(t => t.repeat !== 'none');
+  const over = overdue().filter(inArea), oneoff = S.tasks.filter(t => inArea(t) && t.repeat === 'none' && t.date >= today && !isDone(t, t.date)).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))), rep = S.tasks.filter(t => inArea(t) && t.repeat !== 'none');
   let h = '<div class="row"><h1 class="sp">Plan</h1>' + (form ? '' : '<button class="btn pri" id="newTask">+ New task</button>') + '</div>';
   if (form) h += formHTML();
-  h += '<section class="card"><h2 style="padding-bottom:6px">Tasks</h2>';
+  h += '<section class="card"><h2 style="padding-bottom:6px">Tasks</h2>' + (S.tasks.some(t => t.area) || S.settings.area ? areaChips() : '');
   if (!over.length && !oneoff.length && !rep.length) h += '<div class="empty">No tasks yet. Tap “+ New task”.</div>';
   if (over.length) h += '<div class="sub" style="color:var(--danger);font-weight:700;padding-top:4px">Overdue</div>' + over.map(row).join('');
   let last = '';
@@ -451,6 +663,7 @@ function bindPlan() {
   if (hform) bindHabitForm();
   document.querySelectorAll('[data-te]').forEach(b => b.onclick = () => { const t = S.tasks.find(x => x.id === b.dataset.te); if (t) { form = formFrom(t); render(); window.scrollTo(0, 0); } });
   document.querySelectorAll('[data-he]').forEach(b => b.onclick = () => { const x = S.habits.find(q => q.id === b.dataset.he); if (x) { hform = { id: x.id, title: x.title, goal: String(x.goal), unit: x.unit, per: perOf(x) }; render(); window.scrollTo(0, 0); } });
+  document.querySelectorAll('[data-area]').forEach(b => b.onclick = () => { S.settings.area = b.dataset.area; save(); render(); });
   document.querySelectorAll('[data-td]').forEach(b => b.onclick = () => removeTask(b.dataset.td));
   document.querySelectorAll('[data-hd]').forEach(b => b.onclick = () => removeHabit(b.dataset.hd));
 }
@@ -570,6 +783,15 @@ function weekDays() { // Monday → Sunday of the current week
   const d = new Date(); const wd = (d.getDay() + 6) % 7; d.setDate(d.getDate() - wd);
   return Array.from({ length: 7 }, (_, i) => { const x = new Date(d); x.setDate(d.getDate() + i); return x; });
 }
+function histDays() { const end = weekDays()[6], out = []; for (let i = 83; i >= 0; i--) { const d = new Date(end); d.setDate(end.getDate() - i); out.push(dkey(d)); } return out; }
+function histCount(x) { const t = dkey(); return histDays().filter(k => k <= t && habitAmt(x, k) > 0).length; }
+function heatGrid(x) {
+  const t = dkey(), per = perOf(x);
+  return '<div class="hist" role="img" aria-label="' + esc(x.title) + ': ' + histCount(x) + ' active days in the last 12 weeks">' + histDays().map(k => {
+    const c = habitAmt(x, k);
+    return '<i class="' + (k > t ? 'f' : per === 'day' ? (c >= x.goal ? 'l3' : c > 0 ? 'l1' : habitSkipped(x, k) ? 'sk' : '') : (c > 0 ? 'l3' : '')) + '"></i>';
+  }).join('') + '</div>';
+}
 function viewReport() {
   const days = weekDays(), keys = days.map(d => dkey(d)), names = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
   const mins = keys.map(k => S.sessions.filter(s => dkey(new Date(s.start)) === k).reduce((a, s) => a + s.dur, 0));
@@ -600,6 +822,11 @@ function viewReport() {
       '<div class="heat" style="width:100%" role="img" aria-label="' + met + ' of ' + passed + ' days done">' + keys.map(k => { const c = habitAmt(x, k); return '<i class="' + (c >= x.goal ? 'l3' : c > 0 ? 'l1' : '') + '"></i>'; }).join('') + '</div></div>';
   });
   h += '</section>';
+  if (S.habits.length) {
+    h += '<section class="card"><h2 style="padding-bottom:6px">Habit history · 12 weeks</h2>';
+    S.habits.forEach(x => { h += '<div style="padding:8px 0;border-top:1px solid var(--line)"><div class="row"><span class="title">' + esc(x.title) + '</span><span class="sub">' + histCount(x) + ' active days</span></div>' + heatGrid(x) + '</div>'; });
+    h += '<div class="sub" style="padding-top:6px">Dark = goal reached · light = some progress · dashed = skipped</div></section>';
+  }
   const top = {}; S.sessions.filter(s => keys.includes(dkey(new Date(s.start)))).forEach(s => {
     const t = S.tasks.find(x => x.id === s.taskId), n = s.label || (t ? t.title : null); if (n) top[n] = (top[n] || 0) + s.dur;
   });
@@ -677,13 +904,16 @@ function viewMore() {
   if (moreSub === 'lists') return openList && listById(openList) ? viewListDetail() : viewLists();
   if (moreSub === 'notes') return openNote && noteById(openNote) ? viewNoteEdit() : viewNotes();
   if (moreSub === 'calc') return viewCalc();
+  if (moreSub === 'search') return viewSearch();
   const n = S.lists.length, m = S.notes.length;
   const tile = (k, ic, t, s, attr) => '<button class="menu" ' + (attr || 'data-m="' + k + '"') + '><span class="ic" aria-hidden="true">' + ic + '</span><span class="mt"><b>' + t + '</b><span class="sub">' + s + '</span></span><span aria-hidden="true">›</span></button>';
   return '<h1>More</h1><section class="card">' +
+    tile('search', '🔍', 'Search', 'Find anything') +
     tile('lists', '🛒', 'Lists', n ? n + (n === 1 ? ' list' : ' lists') : 'Shopping, packing, anything with ticks') +
     tile('notes', '📝', 'Notes', m ? m + (m === 1 ? ' note' : ' notes') : 'Quick notes') +
     tile('calc', '🧮', 'Calculator', 'With VAT shortcuts') +
-    tile('report', '📊', 'Weekly report', 'Focus, tasks and habits', 'data-go="report"') + '</section>';
+    tile('report', '📊', 'Weekly report', 'Focus, tasks and habits', 'data-go="report"') +
+    tile('review', '🌙', 'Evening review', 'Close the day, plan tomorrow', 'data-go="review"') + '</section>';
 }
 /* lists */
 function viewLists() {
@@ -822,6 +1052,8 @@ function bindMore() {
     $('#ntitle').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('#nbody').focus(); } };
     $('#ndel').onclick = () => { const idx = S.notes.findIndex(x => x.id === id), n = S.notes[idx]; S.notes.splice(idx, 1); openNote = null; save(); render(); toast('Note deleted', () => { S.notes.splice(Math.min(idx, S.notes.length), 0, n); save(); render(); }); };
   }
+  /* search */
+  if (moreSub === 'search') { const q = $('#q'); q.oninput = () => { $('#qres').innerHTML = searchHTML(q.value); bindSearchRes(); }; q.focus(); }
   /* calculator */
   if (moreSub === 'calc') {
     document.querySelectorAll('[data-k]').forEach(b => b.onclick = () => calcPress(b.dataset.k));
@@ -834,15 +1066,41 @@ function bindMore() {
   }
 }
 
+/* search */
+const norm = s => String(s || '').toLocaleLowerCase('tr');
+function searchHTML(q) {
+  q = norm(q).trim(); if (q.length < 2) return '<div class="empty">Type at least 2 letters.</div>';
+  const has = s => norm(s).includes(q);
+  const tasks = S.tasks.filter(t => has(t.title) || has(t.notes) || (t.subs || []).some(s => has(s.text))).slice(0, 8);
+  const lists = S.lists.filter(l => has(l.title) || l.items.some(i => has(i.text))).slice(0, 8);
+  const notes = S.notes.filter(n => has(n.title) || has(n.body)).slice(0, 8);
+  const habits = S.habits.filter(x => has(x.title)).slice(0, 8);
+  const grp = (title, rows) => rows.length ? '<section class="card"><h2 style="padding-bottom:6px">' + title + '</h2>' + rows.join('') + '</section>' : '';
+  const h = grp('Tasks', tasks.map(t => '<button class="menu" data-rt="' + t.id + '">' + tchip(t) + '<span class="mt"><b>' + esc(t.title) + '</b><span class="sub">' + esc(taskMeta(t)) + '</span></span><span aria-hidden="true">›</span></button>')) +
+    grp('Lists', lists.map(l => { const it = l.items.find(i => has(i.text)); return '<button class="menu" data-rl="' + l.id + '"><span class="ic" aria-hidden="true">🛒</span><span class="mt"><b>' + esc(l.title) + '</b><span class="sub">' + (it ? esc(it.text) : l.items.length + ' items') + '</span></span><span aria-hidden="true">›</span></button>'; })) +
+    grp('Notes', notes.map(n => { const first = (n.body || '').split('\n').find(s => has(s)) || (n.body || '').split('\n')[0] || ''; return '<button class="menu" data-rn="' + n.id + '"><span class="ic" aria-hidden="true">📝</span><span class="mt"><b>' + esc(n.title.trim() || first || 'Untitled') + '</b><span class="sub" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(first) + '</span></span><span aria-hidden="true">›</span></button>'; })) +
+    grp('Habits', habits.map(x => '<button class="menu" data-rh="' + x.id + '"><span class="ic" aria-hidden="true">🔁</span><span class="mt"><b>' + esc(x.title) + '</b><span class="sub">' + fmtNum(x.goal) + ' ' + esc(x.unit) + ' per ' + perOf(x) + '</span></span><span aria-hidden="true">›</span></button>'));
+  return h || '<div class="empty">No matches.</div>';
+}
+function bindSearchRes() {
+  document.querySelectorAll('[data-rt]').forEach(b => b.onclick = () => { const t = S.tasks.find(x => x.id === b.dataset.rt); if (t) { form = formFrom(t); go('plan'); } });
+  document.querySelectorAll('[data-rl]').forEach(b => b.onclick = () => { moreSub = 'lists'; openList = b.dataset.rl; render(); window.scrollTo(0, 0); });
+  document.querySelectorAll('[data-rn]').forEach(b => b.onclick = () => { moreSub = 'notes'; openNote = b.dataset.rn; render(); window.scrollTo(0, 0); });
+  document.querySelectorAll('[data-rh]').forEach(b => b.onclick = () => { const x = S.habits.find(q => q.id === b.dataset.rh); if (x) { hform = { id: x.id, title: x.title, goal: String(x.goal), unit: x.unit, per: perOf(x) }; go('plan'); } });
+}
+function viewSearch() {
+  return BACK + '<h1>Search</h1><section class="card"><input type="search" id="q" placeholder="Tasks, notes, lists, habits" aria-label="Search everything" autocomplete="off" enterkeyhint="search"></section><div id="qres" style="display:flex;flex-direction:column;gap:14px"></div>';
+}
+
 /* ---------- shell ---------- */
 const TABS = [['today', '☀️', 'Today'], ['plan', '🗓', 'Plan'], ['pomodoro', '⏱', 'Pomodoro'], ['more', '➕', 'More'], ['settings', '⚙️', 'Settings']];
 let tab = (location.hash || '#today').slice(1);
-if (!TABS.find(t => t[0] === tab) && tab !== 'report') tab = 'today';
+if (!TABS.find(t => t[0] === tab) && tab !== 'report' && tab !== 'review') tab = 'today';
 function go(t) { const v = $('#view'); v.classList.remove('in'); void v.offsetWidth; v.classList.add('in'); if (t === 'more') { moreSub = null; openList = openNote = null; } tab = t; location.hash = t; editing = false; window.scrollTo(0, 0); render(); }
 function render() {
-  const view = $('#view'), views = { today: viewToday, plan: viewPlan, pomodoro: viewPomodoro, report: viewReport, more: viewMore, settings: viewSettings };
-  const act = tab === 'report' ? 'more' : tab, y = window.scrollY; view.innerHTML = views[tab]();
-  ({ today: bindToday, plan: bindPlan, pomodoro: bindPomodoro, settings: bindSettings, more: bindMore }[tab] || (() => {}))();
+  const view = $('#view'), views = { today: viewToday, plan: viewPlan, pomodoro: viewPomodoro, report: viewReport, review: viewReview, more: viewMore, settings: viewSettings };
+  const act = tab === 'report' ? 'more' : tab === 'review' ? 'today' : tab, y = window.scrollY; view.innerHTML = views[tab]();
+  ({ today: bindToday, plan: bindPlan, pomodoro: bindPomodoro, settings: bindSettings, more: bindMore, review: bindReview }[tab] || (() => {}))();
   $('#nav').innerHTML = TABS.map(t => '<button data-tab="' + t[0] + '" class="' + (t[0] === act ? 'on' : '') + '"' + (t[0] === act ? ' aria-current="page"' : '') + '><span aria-hidden="true">' + t[1] + '</span>' + t[2] + '</button>').join('');
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => go(b.dataset.tab));
   document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
