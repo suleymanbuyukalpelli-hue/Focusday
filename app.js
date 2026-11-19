@@ -1,7 +1,7 @@
 'use strict';
 /* FocusDay — personal planner PWA. Data stays on the phone (localStorage). */
 const KEY = 'focusday.v1';
-const BUILD = '2026-11-19 · v10';
+const BUILD = '2026-11-19 · v11';
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -66,7 +66,7 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (_
 load(); applyTheme();
 
 /* ---------- push server (lock-screen reminders) ---------- */
-const PUSH_URL = ''; // Cloudflare Worker address, e.g. https://focusday-push.<name>.workers.dev
+const PUSH_URL = 'https://focusday-push.suleymanbuyukalpelli.workers.dev'; // Cloudflare Worker address, e.g. https://focusday-push.<name>.workers.dev
 const VAPID_PUBLIC = 'BMmOAKt8mkdnZjmP3ev5nNZdTP4qDwerEc4irojjlxt__SmvXWo1FPXM8pgH4OmFc0AbWdrjcHB3oiO8InVjsOE';
 const SUBKEY = 'focusday.pushsub', DEVKEY = 'focusday.dev';
 function pushSub() { try { return JSON.parse(localStorage.getItem(SUBKEY)); } catch (_) { return null; } }
